@@ -1,0 +1,14 @@
+[project]
+authors = ["Samuel Ibarra <ing.samuelibarra@gmail.com>"]
+channels = ["https://repo.prefix.dev/conda-forge", "https://conda.modular.com/max-nightly"]
+description = "Add a short description here"
+name = "tython"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+tt = "mojo src/tython.mojo"
+tython = {depends-on=["tt"]}
+
+[dependencies]
+max = ">=25.1.0.dev2025012905,<26"
