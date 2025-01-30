@@ -1,56 +1,84 @@
-from python import Python as py, PythonObject
+# from python import Python as py, PythonObject
 from collections import Dict, Optional
 from collections.string import StringSlice
 from sys import argv
+import os
 
 alias SymbolTable = Dict[String, String]
+alias ArgStr = StringSlice[StaticConstantOrigin]
+
+alias p_args = ["path"]
+alias options = ["strict"]
+# alias flags = []
 
 
 struct TypeChecker:
     var symbol_table: SymbolTable
-    var node_visitor: PythonObject
+    # var node_visitor: PythonObject
 
     fn __init__(out self) raises:
         self.symbol_table = SymbolTable()
-        var ast = py.import_module("ast")
-        self.node_visitor = ast.NodeVisitor()
+        # var ast = py.import_module("ast")
+        # self.node_visitor = ast.NodeVisitor()
+
 
 struct Args:
-    var path: StringSlice[StaticConstantOrigin]
+    var path: ArgStr
+    var strict: Bool
 
-    fn __init__(out self):
+    fn __init__(out self) raises:
         self = collect_args()
-        
 
-fn collect_args(out args: Args) raises:
-    var name: Optional[StringSlice[StaticConstantOrigin]] = None
-    for arg in argv():
-        if arg.startswith("--"):
-            name = arg.lstrip("--")
+    fn __init__(out self, owned path: ArgStr, owned strict: Bool = True) raises:
+        self.path = path
+        self.strict = strict
+
+
+fn collect_args() raises -> Args:
+    var argvs = argv()
+    var name: Optional[ArgStr] = None
+    var opts = Dict[ArgStr, ArgStr]()
+    var flags = List[ArgStr]()
+    var pos = List[ArgStr]()
+
+    for idx in range(1, len(argvs)):
+        print(argvs[idx])
+        if argvs[idx].startswith("--"):
+            if argvs[idx] not in flags and argvs[idx] not in options:
+                os.abort("Invalid Flag Name", argvs[idx])
+
+            if idx + 1 < len(argvs) and argvs[idx] in options:
+                name = argvs[idx].lstrip("--")
+                continue
+
+            elif argvs[idx] in flags:
+                flags.append(argvs[idx].lstrip("--"))
+                continue
+
+            else:
+                os.abort("Invalid Flag Construction", argvs[idx])
             continue
+
         if name:
-            if name.unsafe_value() == "path":
-                args.path = arg
+            opts[name.value()] = argvs[idx]
             name = None
             continue
-        raise Error("Missing keys on args collector.")
-    while i < len(args):
-        alias arg = args[i]
-        print(arg)
-        if args[i].startswith("--"):
-            
+
+        pos.append(argvs[idx])
+
+    # Path
+    path = pos[0]
+
+    # Strict
+    strict = Bool(opts.get("strict", "true"))
+
+    return Args(path=path, strict=strict)
+
 
 fn main() raises:
-    alias args = argv()
-    i = 0
-    while i < len(args):
-        if args[i].startswith("--"):
-             
-    for arg in args:
-        print(arg)
-    var ast = py.import_module("ast")
-    with open("example.py", "r") as f:
+    var data = Args()
+    # var ast = py.import_module("ast")
+    with open(data.path, "r") as f:
         code = f.read()
-    tree = ast.parse(code)
-    print(tree)
-    tt = TypeChecker()
+    print(code)
+    _ = TypeChecker()

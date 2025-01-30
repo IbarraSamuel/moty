@@ -3,7 +3,7 @@ authors = ["Samuel Ibarra <ing.samuelibarra@gmail.com>"]
 channels = ["https://repo.prefix.dev/conda-forge", "https://conda.modular.com/max-nightly"]
 description = "Add a short description here"
 name = "tython"
-platforms = ["osx-arm64"]
+platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
 
 [tasks]
