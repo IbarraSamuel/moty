@@ -3,72 +3,56 @@ from collections.string import StringSlice
 from sys import argv
 import os
 
+alias ConfigList = ListLiteral
 alias ArgStr = StringSlice[StaticConstantOrigin]
 
-alias POSITIONAL = ["path"]
-alias ARGUMENTS = ["values"]
-alias FLAGS = ["strict"]
+
+fn contains[
+    S: Writable, T: WritableCollectionElement, //, l: ListLiteral[T]
+](v: S) -> Bool:
+    @parameter
+    for i in range(len(l)):
+        if String(l.get[i, T]()) == String(v):
+            return True
+
+    return False
 
 
-struct Config(Writable):
-    var path: ArgStr
-    var rules: ArgStr
-    var strict: Bool
-
-    fn __init__(out self) raises:
-        pos, opt, flags = collect_args()
-
-        # Path
-        self.path = pos[0]
-
-        # Rules
-        self.rules = opt.get("rules", "all")
-
-        # Strict
-        self.strict = "strict" in flags
-
-    fn write_to[W: Writer](self, mut w: W):
-        w.write(
-            "Config(path=",
-            self.path,
-            ", rules=",
-            self.rules,
-            ", strict=",
-            self.strict,
-            ")",
-        )
-
-
-fn collect_args() -> (List[ArgStr], Dict[ArgStr, ArgStr], List[ArgStr]):
+fn collect_args[
+    SC: WritableCollectionElement, //,
+    positional: ConfigList[SC],
+    arguments: ConfigList[SC],
+    flags: ConfigList[SC],
+]() -> (List[ArgStr], Dict[ArgStr, ArgStr], List[ArgStr]):
     var argvs = argv()
     var pos = List[ArgStr]()
     var name: Optional[ArgStr] = None
     var opts = Dict[ArgStr, ArgStr]()
-    var flags = List[ArgStr]()
+    var flgs = List[ArgStr]()
 
     for idx in range(1, len(argvs)):
         arg = argvs[idx]
         # Positional (The first arg should not be considered)
-        if idx <= len(POSITIONAL):
+        if idx <= len(positional):
             pos.append(arg)
             continue
 
         # Args & Flags
         if arg.startswith("--"):
             arg = arg.lstrip("--")
-            if arg not in FLAGS and arg not in ARGUMENTS:
-                os.abort("Invalid Flag Name", arg)
+            if not contains[flags](arg) and not contains[arguments](arg):
+                os.abort("Invalid Arg Name: '", arg, "'.")
 
-            if arg in FLAGS:
-                flags.append(arg)
+            if contains[flags](arg):
+                flgs.append(arg)
                 continue
 
-            if arg in ARGUMENTS and idx + 1 < len(argvs):
+            if contains[arguments](arg) and idx + 1 < len(argvs):
                 name = arg
                 continue
 
             else:
-                os.abort("Invalid Flag Construction", argvs[idx])
+                os.abort("Invalid Flag Construction: ", argvs[idx])
             continue
 
         if name:
@@ -76,5 +60,5 @@ fn collect_args() -> (List[ArgStr], Dict[ArgStr, ArgStr], List[ArgStr]):
             name = None
             continue
 
-        os.abort("Not valid argument/flag ->", argvs[idx])
-    return pos, opts, flags
+        os.abort("Not valid argument/flag -> ", argvs[idx])
+    return pos, opts, flgs

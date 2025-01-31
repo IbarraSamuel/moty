@@ -7,8 +7,9 @@ platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
 
 [tasks]
-tt = "mojo src/tython.mojo"
-tython = {depends-on=["tt"]}
+tython = "mojo src/tython.mojo"
+build = "mojo build src/tython.mojo -o tt"
+tt = {cmd="tt", depends-on=["build"]}
 
 [dependencies]
 max = ">=25.1.0.dev2025012905,<26"
