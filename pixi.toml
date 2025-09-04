@@ -1,15 +1,15 @@
 [project]
 authors = ["Samuel Ibarra <ing.samuelibarra@gmail.com>"]
 channels = ["https://repo.prefix.dev/conda-forge", "https://conda.modular.com/max-nightly"]
-description = "Add a short description here"
-name = "tython"
+description = "Python static type checker written in Mojo."
+name = "moty"
 platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
 
 [tasks]
-tython = "mojo src/tython.mojo"
-build = "mojo build src/tython.mojo -o tt"
-tt = {cmd="tt", depends-on=["build"]}
+moty = "mojo src/moty.mojo"
+build = "mojo build src/moty.mojo -o mt"
+mt = {cmd="mt", depends-on=["build"]}
 
 [dependencies]
-max = ">=25.1.0.dev2025012905,<26"
+mojo-compiler = "<1.0.0"

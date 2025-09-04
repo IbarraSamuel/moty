@@ -1,3 +1,3 @@
-# Tython
+# Moty
 
-Python Static Type Checker.
+Python Static Type Checker Written in Mojo.
