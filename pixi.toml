@@ -9,7 +9,7 @@ version = "0.1.0"
 [tasks]
 moty = "mojo src/moty.mojo"
 build = "mojo build src/moty.mojo -o mt"
-mt = {cmd="mt", depends-on=["build"]}
+mt = {cmd="./mt", depends-on=["build"]}
 
 [dependencies]
-mojo-compiler = "<1.0.0"
+mojo = "<1.0.0"

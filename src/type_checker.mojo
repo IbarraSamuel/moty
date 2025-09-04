@@ -49,13 +49,13 @@ struct NodeVisitor:
 
         if log_type == LogType.verbose:
             for arg in args:
-                print(arg[], end=" ")
+                print(arg, end=" ")
                 print()
 
             print()
 
     def isinstance(self, v: PythonObject, type: PythonObject) -> Bool:
-        return self._isinstance(v, type)
+        return self._isinstance(v, type).__bool__()
 
     def get_annotation(self, annotation: PythonObject) -> PythonObject:
         if self.isinstance(annotation, self._ast.Name):
@@ -109,10 +109,10 @@ struct NodeVisitor:
                 if actual_type != expected_type:
                     errors.append(
                         "Type error in call to {}: Expected".format(
-                            func_name.__str__()
+                            String(func_name)
                         )
                         + " {}, got {}".format(
-                            expected_type.__str__(), actual_type.__str__()
+                            String(expected_type), String(actual_type)
                         )
                     )
 
@@ -123,12 +123,12 @@ struct NodeVisitor:
         errors: PythonObject,
     ):
         if self.isinstance(node, self._ast.FunctionDef):
-            self.print("Checking function:", node.__str__())
+            self.print("Checking function:", String(node))
             self.check_function_def(node, function_signatures)
         elif self.isinstance(node, self._ast.Call):
-            self.print("Checking Call:", node.__str__())
+            self.print("Checking Call:", String(node))
             self.check_call(node, function_signatures, errors)
 
         for child in self._ast.iter_child_nodes(node):
-            self.print("Checking child:", child.__str__())
+            self.print("Checking child:", String(child))
             self.traverse_ast(child, function_signatures, errors)

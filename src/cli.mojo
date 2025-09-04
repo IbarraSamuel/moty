@@ -1,30 +1,35 @@
 from collections import Optional, Dict
 from collections.string import StringSlice
 from sys import argv
-import os
+import os, sys
 
-alias ConfigList = ListLiteral
+alias ConfigList = List
 alias ArgStr = StringSlice[StaticConstantOrigin]
 
 
 fn contains[
-    S: Writable, T: WritableCollectionElement, //, l: ListLiteral[T]
+    S: Writable, T: Writable & Movable & Copyable, //, l: ConfigList[T]
 ](v: S) -> Bool:
     @parameter
     for i in range(len(l)):
-        if String(l.get[i, T]()) == String(v):
+        if String(l[i]) == String(v):
             return True
 
     return False
 
 
 fn collect_args[
-    SC: WritableCollectionElement, //,
+    SC: Writable & Copyable & Movable, //,
     positional: ConfigList[SC],
     arguments: ConfigList[SC],
     flags: ConfigList[SC],
 ]() -> (List[ArgStr], Dict[ArgStr, ArgStr], List[ArgStr]):
     var argvs = argv()
+
+    var arglen = len(argvs)
+    if arglen < 2:
+        print("Must provide an argument.")
+        sys.exit(1)
     var pos = List[ArgStr]()
     var name: Optional[ArgStr] = None
     var opts = Dict[ArgStr, ArgStr]()
@@ -41,7 +46,7 @@ fn collect_args[
         if arg.startswith("--"):
             arg = arg.lstrip("--")
             if not contains[flags](arg) and not contains[arguments](arg):
-                os.abort("Invalid Arg Name: '", arg, "'.")
+                os.abort(String("Invalid Arg Name: '", arg, "'."))
 
             if contains[flags](arg):
                 flgs.append(arg)
@@ -52,7 +57,7 @@ fn collect_args[
                 continue
 
             else:
-                os.abort("Invalid Flag Construction: ", argvs[idx])
+                os.abort(String("Invalid Flag Construction: ", argvs[idx]))
             continue
 
         if name:
@@ -60,5 +65,5 @@ fn collect_args[
             name = None
             continue
 
-        os.abort("Not valid argument/flag -> ", argvs[idx])
+        os.abort(String("Not valid argument/flag -> ", argvs[idx]))
     return pos, opts, flgs
