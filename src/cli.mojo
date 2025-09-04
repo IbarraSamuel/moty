@@ -3,26 +3,13 @@ from collections.string import StringSlice
 from sys import argv
 import os, sys
 
-alias ConfigList = List
-alias ArgStr = StringSlice[StaticConstantOrigin]
-
-
-fn contains[
-    S: Writable, T: Writable & Movable & Copyable, //, l: ConfigList[T]
-](v: S) -> Bool:
-    @parameter
-    for i in range(len(l)):
-        if String(l[i]) == String(v):
-            return True
-
-    return False
+alias ArgStr = StaticString
 
 
 fn collect_args[
-    SC: Writable & Copyable & Movable, //,
-    positional: ConfigList[SC],
-    arguments: ConfigList[SC],
-    flags: ConfigList[SC],
+    positional: List[StaticString],
+    arguments: List[StaticString],
+    flags: List[StaticString],
 ]() -> (List[ArgStr], Dict[ArgStr, ArgStr], List[ArgStr]):
     var argvs = argv()
 
@@ -45,14 +32,14 @@ fn collect_args[
         # Args & Flags
         if arg.startswith("--"):
             arg = arg.lstrip("--")
-            if not contains[flags](arg) and not contains[arguments](arg):
+            if arg not in flgs and arg not in arguments:
                 os.abort(String("Invalid Arg Name: '", arg, "'."))
 
-            if contains[flags](arg):
+            if arg in flags:
                 flgs.append(arg)
                 continue
 
-            if contains[arguments](arg) and idx + 1 < len(argvs):
+            if arg in arguments and idx + 1 < len(argvs):
                 name = arg
                 continue
 

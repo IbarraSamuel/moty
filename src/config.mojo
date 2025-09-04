@@ -5,9 +5,9 @@ from pathlib import Path
 
 alias ArgStr = StringSlice[StaticConstantOrigin]
 
-alias POSITIONAL = ["path"]
-alias ARGUMENTS = ["log-type"]
-alias FLAGS = ["strict"]
+alias POSITIONAL = [StaticString("path")]
+alias ARGUMENTS = [StaticString("log-type")]
+alias FLAGS = [StaticString("strict")]
 
 
 @register_passable("trivial")
