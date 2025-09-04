@@ -6,3 +6,4 @@
 .magic
 # Binary
 mt
+kgen.trace.json.time*
