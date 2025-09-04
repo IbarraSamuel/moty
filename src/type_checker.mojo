@@ -11,7 +11,7 @@ struct TypeChecker:
     fn run(self, code: String) raises -> List[String]:
         function_signatures = py.evaluate("{}")
         errors = py.evaluate("[]")
-        tree = parse_code(code)
+        tree = parse(code)
         self.visitor.traverse_ast(tree, function_signatures, errors)
         var errs = List[String]()
         for err in errors:
@@ -19,7 +19,7 @@ struct TypeChecker:
         return errs
 
 
-fn parse_code(code: String) raises -> PythonObject:
+fn parse(code: String) raises -> PythonObject:
     ast = py.import_module("ast")
     return ast.parse(code)
 
