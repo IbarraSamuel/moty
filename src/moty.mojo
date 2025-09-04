@@ -1,5 +1,4 @@
 # from python import Python as py, PythonObject
-from collections import Dict
 from config import Config, POSITIONAL, LogType
 from type_checker import TypeChecker
 

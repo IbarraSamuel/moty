@@ -1,5 +1,4 @@
 from python import PythonObject, Python as py
-from collections import Dict
 from config import LogType, Config
 
 
