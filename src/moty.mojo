@@ -1,6 +1,6 @@
 # from python import Python as py, PythonObject
 from collections import Dict
-from config import Config, POSITIONAL
+from config import Config, POSITIONAL, LogType
 from type_checker import TypeChecker
 
 
@@ -10,7 +10,7 @@ fn main() raises:
     with open(config.path, "r") as f:
         code = f.read()
 
-    if config.log_type == config.log_type.verbose:
+    if config.log_type == LogType.verbose:
         print(code)
 
     checker = TypeChecker(config)

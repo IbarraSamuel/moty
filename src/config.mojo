@@ -1,9 +1,5 @@
-from collections.string import StringSlice
-from collections import Dict
-from cli import collect_args
+from cli import collect_args, ArgValues
 from pathlib import Path
-
-alias ArgStr = StringSlice[StaticConstantOrigin]
 
 alias POSITIONAL = [StaticString("path")]
 alias ARGUMENTS = [StaticString("log-type")]
@@ -12,24 +8,19 @@ alias FLAGS = [StaticString("strict")]
 
 @register_passable("trivial")
 struct LogType(EqualityComparable, Writable):
-    alias silent = LogType(1)
-    alias verbose = LogType(2)
-    var _v: Int
+    alias silent = LogType("verbose")
+    alias verbose = LogType("silent")
 
-    fn __init__(out self, v: Int):
-        self._v = v
+    var value: Int
 
-    @implicit
-    fn __init__(out self, v: ArgStr):
-        self = LogType.silent
-        if v == "verbose":
-            self = LogType.verbose
+    fn __init__(out self, v: __type_of("verbose")):
+        self.value = 1
+
+    fn __init__(out self, v: __type_of("silent")):
+        self.value = 2
 
     fn __eq__(self, other: Self) -> Bool:
-        return self._v == other._v
-
-    fn __ne__(self, other: Self) -> Bool:
-        return not (self == other)
+        return self.value == other.value
 
     fn write_to[W: Writer](self, mut w: W):
         s = "silent"
@@ -47,22 +38,32 @@ struct Config(Writable):
     var strict: Bool
 
     fn __init__(out self):
-        pos, opt, flags = collect_args[POSITIONAL, ARGUMENTS, FLAGS]()
-        self = Self(pos, opt, flags)
+        var arg_values = collect_args[POSITIONAL, ARGUMENTS, FLAGS]()
+        self = Self(arg_values^)
+
+    fn __init__(out self, deinit arg_values: ArgValues):
+        self = Self(
+            arg_values.arguments^,
+            arg_values.options^,
+            arg_values.flags^,
+        )
         if self.log_type == self.log_type.verbose:
             print(self)
 
     fn __init__(
         out self,
-        pos: List[ArgStr],
-        opt: Dict[ArgStr, ArgStr],
-        flags: List[ArgStr],
+        var pos: List[StaticString],
+        var opt: Dict[StaticString, StaticString],
+        var flags: List[StaticString],
     ):
         # Path
         self.path = Path(pos[0])
 
         # Log Type
-        self.log_type = opt.get("log-type", "silent")
+        var log_type = opt.get("log-type", "silent")
+        self.log_type = (
+            LogType.silent if log_type == "silent" else LogType.verbose
+        )
 
         # Strict
         self.strict = "strict" in flags
