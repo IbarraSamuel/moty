@@ -30,14 +30,14 @@ struct NodeVisitor:
     var log_type: LogType
     # var _typeof: PythonObject
 
-    def __init__(out self, config: Config):
+    fn __init__(out self, config: Config) raises:
         self._ast = py.import_module("ast")
         builtins = py.import_module("builtins")
         self._isinstance = builtins.isinstance
-        self.log_type = config.log_type
+        self.log_type = config.log_type.copy()
         # self._typeof = builtins.type
 
-    def print(
+    fn print(
         self,
         *args: String,
         input_level: String = "debug",
@@ -53,16 +53,16 @@ struct NodeVisitor:
 
             print()
 
-    def isinstance(self, v: PythonObject, type: PythonObject) -> Bool:
+    fn isinstance(self, v: PythonObject, type: PythonObject) raises -> Bool:
         return self._isinstance(v, type).__bool__()
 
-    def get_annotation(self, annotation: PythonObject) -> PythonObject:
+    fn get_annotation(self, annotation: PythonObject) raises -> PythonObject:
         if self.isinstance(annotation, self._ast.Name):
             return annotation.id
         # Handle more complex type annotations if needed
         return None
 
-    def get_expression_type(self, expr: PythonObject) -> PythonObject:
+    fn get_expression_type(self, expr: PythonObject) raises -> PythonObject:
         if self.isinstance(expr, self._ast.Constant):
             return py.type(expr.value).__name__
         elif self.isinstance(expr, self._ast.Name):
@@ -70,9 +70,9 @@ struct NodeVisitor:
         # Add more expressions as needed
         return "unknown"
 
-    def check_function_def(
+    fn check_function_def(
         self, node: PythonObject, function_signatures: PythonObject
-    ):
+    ) raises:
         # arg_types = [get_annotation(arg.annotation) for arg in node.args.args]
         arg_types = py.evaluate("[]")
         self.print("Creating a list:", String(arg_types))
@@ -90,12 +90,12 @@ struct NodeVisitor:
 
         function_signatures[node.name] = dct
 
-    def check_call(
+    fn check_call(
         self,
         node: PythonObject,
         function_signatures: PythonObject,
         errors: PythonObject,
-    ):
+    ) raises:
         func_name = node.func.id
         if func_name in function_signatures:
             func_sig = function_signatures[func_name]
@@ -115,12 +115,12 @@ struct NodeVisitor:
                         )
                     )
 
-    def traverse_ast(
+    fn traverse_ast(
         self,
         node: PythonObject,
         function_signatures: PythonObject,
         errors: PythonObject,
-    ):
+    ) raises:
         if self.isinstance(node, self._ast.FunctionDef):
             self.print("Checking function:", String(node))
             self.check_function_def(node, function_signatures)

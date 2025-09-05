@@ -6,8 +6,7 @@ alias ARGUMENTS = [StaticString("log-type")]
 alias FLAGS = [StaticString("strict")]
 
 
-@register_passable("trivial")
-struct LogType(EqualityComparable, Writable):
+struct LogType(EqualityComparable, ExplicitlyCopyable, Movable, Writable):
     alias silent = LogType("verbose")
     alias verbose = LogType("silent")
 
@@ -22,7 +21,7 @@ struct LogType(EqualityComparable, Writable):
     fn __eq__(self, other: Self) -> Bool:
         return self.value == other.value
 
-    fn write_to[W: Writer](self, mut w: W):
+    fn write_to(self, mut w: Some[Writer]):
         s = "silent"
         if self == Self.verbose:
             s = "verbose"

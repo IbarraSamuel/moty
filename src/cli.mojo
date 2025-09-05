@@ -1,4 +1,4 @@
-import os, sys
+import sys
 
 
 @fieldwise_init
@@ -41,7 +41,8 @@ fn collect_args[
         if arg.startswith("--"):
             arg = arg.lstrip("--")
             if arg not in arg_values.flags and arg not in arguments:
-                os.abort(String("Invalid Arg Name: '", arg, "'."))
+                print("Invalid Arg Name: '", arg, "'.", sep="")
+                sys.exit(1)
 
             if arg in flags:
                 arg_values.flags.append(arg)
@@ -52,7 +53,8 @@ fn collect_args[
                 continue
 
             else:
-                os.abort(String("Invalid Flag Construction: ", argvs[idx]))
+                print(String("Invalid Flag Construction: ", argvs[idx]))
+                sys.exit(1)
             continue
 
         if name != "":
@@ -60,4 +62,5 @@ fn collect_args[
             name = ""
             continue
 
-        os.abort(String("Not valid argument/flag -> ", argvs[idx]))
+        print(String("Not a valid argument/flag -> `", argvs[idx], "`"))
+        sys.exit(1)

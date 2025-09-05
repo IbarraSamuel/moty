@@ -1,19 +1,23 @@
-# from python import Python as py, PythonObject
+import sys
+
 from config import Config, POSITIONAL, LogType
 from type_checker import TypeChecker
 
 
-fn main() raises:
+fn main():
     var config = Config()
+    try:
+        run(config^)
+    except e:
+        print("[ERROR]:", e)
+        sys.exit(1)
 
-    with open(config.path, "r") as f:
-        code = f.read()
 
-    if config.log_type == LogType.verbose:
-        print(code)
+fn run(var config: Config) raises:
+    code = config.path.read_text()
 
     checker = TypeChecker(config)
     errors = checker.run(code)
 
-    for err in range(len(errors)):
-        print(err, ":", errors[err])
+    for errno, err in enumerate(errors):
+        print(errno, ": ", err, sep="")
