@@ -6,7 +6,7 @@ alias ARGUMENTS = [StaticString("log-type")]
 alias FLAGS = [StaticString("strict")]
 
 
-struct LogType(EqualityComparable, ExplicitlyCopyable, Movable, Writable):
+struct LogType(Copyable, EqualityComparable, Movable, Writable):
     alias silent = LogType("verbose")
     alias verbose = LogType("silent")
 
