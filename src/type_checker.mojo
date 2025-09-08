@@ -16,7 +16,7 @@ struct TypeChecker:
         var errs = List[String]()
         for err in errors:
             errs.append(String(err))
-        return errs
+        return errs^
 
 
 fn parse(code: String) raises -> PythonObject:
