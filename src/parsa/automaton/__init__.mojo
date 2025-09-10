@@ -1,5 +1,7 @@
 from hashlib import Hasher
 from collections import Set
+from memory.owned_pointer import OwnedPointer
+import sys
 
 from parsa.automaton.transition_type import TransitionType
 from parsa.automaton.rule import Rule
@@ -10,6 +12,8 @@ alias NODE_START: Scalar[DType.uint16] = 1 << 15
 alias ERROR_RECOVERY_BIT: Scalar[DType.uint16] = 1 << 14
 
 alias SquashedTransitions = Dict[InternalSquashedType, Plan]
+alias InternalStrToToken = Dict[StaticString, InternalTerminalType]
+alias InternalStrToNode = Dict[StaticString, InternalNonterminalType]
 
 
 @fieldwise_init
@@ -84,11 +88,12 @@ struct DFAStateId:
     var inner: UInt
 
 
-struct NFAState:
+struct NFAState(Copyable, Movable):
     var transitions: List[NFATransition]
 
 
-struct DFAState:
+@fieldwise_init
+struct DFAState(Copyable, Movable):
     var transitions: List[DFATransition]
     var nfa_set: Set[NFAStateId]
     var is_final: Bool
@@ -145,7 +150,7 @@ struct StackMode[
     fn write_to(self, mut w: Some[Writer]):
         @parameter
         if StringLiteral[v]() == "Alternative":
-            ref dfa = self.inner.value()()
+            ref dfa = self.inner.value()().next_dfa()
             w.write(
                 "Alternative(",
                 dfa.from_rule,
@@ -171,7 +176,7 @@ struct Push(Copyable, Movable, Representable, Writable):
             ", next_dfa:",
             dfa.from_rule,
             " #",
-            dfa_list_index.inner,
+            dfa.list_index.inner,
             ", stack_mode:",
             self.stack_mode,
             ")",
@@ -231,12 +236,12 @@ struct Keywords:
 struct RuleAutomaton:
     var type_: InternalNonterminalType
     var nfa_states: List[NFAState]
-    var dfa_states: List[OwnedPointer[DFAState]]
+    var dfa_states: List[UnsafePointer[DFAState]]  # sould be a Box...
     var name: StaticString
     var node_may_be_ommited: Bool
     var nfa_end_id: NFAStateId
     var no_transition_dfa_id: Optional[DFAStateId]
-    var fallback_plans: List[OwnedPointer[Plan]]
+    var fallback_plans: List[UnsafePointer[Plan]]  # Should be a Box...
     var does_error_recovery: Bool
 
     fn build(
@@ -260,10 +265,10 @@ struct RuleAutomaton:
                 self.add_transition(
                     start, end, TransitionType.Terminal.build(t.value(), string)
                 )
-            elif nonterminal_map.get(string).is_some():
-                t = nonterminal_map.get(string)
+            elif nonterminal_map.get(string):
+                var nt = nonterminal_map.get(string)
                 self.add_transition(
-                    start, end, TransitionType.Nonterminal.build(t.value())
+                    start, end, TransitionType.Nonterminal.build(nt.value())
                 )
             else:
                 print(
@@ -332,6 +337,7 @@ struct RuleAutomaton:
         elif rule is Rule.Cut:
             print("TODO: UNIMPLEMENTED")
             sys.exit(1)
+
         elif rule is Rule.Next:
             var rule1, rule2 = rebind[Rule.NextType](rule)[]
             var start1, end1 = _build(self, rule1)
@@ -352,25 +358,56 @@ struct RuleAutomaton:
         print("Invalid Rule:", rule)
         sys.exit(1)
 
+    fn nfa_state_mut(
+        mut self, id: NFAStateId
+    ) -> ref [self.nfa_states] NFAState:
+        return self.nfa_states[id.inner]
 
-# struct FirstPlan[v: __mlir_type[`!kgen.string`] = __type_of("Invalid:w
-# ")]
+    fn nfa_state(self, id: NFAStateId) -> ref [self.nfa_states] NFAState:
+        return self.nfa_states[id.inner]
 
-# struct DFAState:
-#     var transitions: List[DFATransition]
-#     var nfa_set: Dict[NFASatateId]
-#     var is_final: Bool
-#     var is_calculated: Bool
-#     var node_may_be_omitted: Bool
-#     var list_index: DFAStateId  # the index in the dfa_states vec in the automaton
-#     var from_alternative_list_index: Optional[DFAStateId]
+    fn new_nfa_states(mut self) -> (NFAStateId, NFAStateId):
+        @parameter
+        fn new() -> NFAStateId:
+            var nfa_state = NFAState(transitions={})
+            self.nfa_states.push(nfa_states)
+            return NFAStateId(len(self.nfa_states) - 1)
 
-#     # This is the part that will be used by the parser
-#     var transition_to_plan: FastLookupTransitions
-#     var from_rule: StaticString
+        return new(), new()
+
+    fn add_transition(
+        mut self,
+        start: NFAStateId,
+        to: NFAStateId,
+        type_: Optional[TransitionType],
+    ):
+        self.nfa_state_mut(start).transitions.push(NFATransition(type_, to))
+
+    fn add_empty_transition(mut self, start: NFAStateId, to: NFAStateId):
+        self.add_transition(start, to, None)
+
+    fn group_nfas(self, nfa_state_ids: List[NFAStateId]) -> Set[NFAStateId]:
+        var set_ = {v for v in nfa_state_ids}
+        for nfa_state_id in nfa_state_ids:
+            for transition in self.nfa_state(nfa_state_id).transitions:
+                if not transition.type_:
+                    set_.insert(transition.to)
+                    if transition.to not in nfa_state_ids:
+                        lst = [v for v in set_]
+                        set_.extend(self.group_nfas(lst^))
+
+        return set_
+
+    # TODO: MISSING
+    # nfa_to_dfa
+    # construct_powerset
+    # construct_powerset_for_dfa
+    # add_no_transition_dfa_if_neccessary
+    # illustrate_dfa
 
 
-struct FastLookupTransitions[Iterable]:
+# TODO: Should implement iterator but I will iterate the inner list and ignore None values. That's all.
+struct FastLookupTransitions(Copyable, Movable):
     var inner: List[Optional[Plan]]
 
     fn __init__(out self):
@@ -383,6 +420,7 @@ struct FastLookupTransitions[Iterable]:
     fn new_empty() -> Self:
         self = Self()
 
+    @staticmethod
     fn from_plans(
         terminal_count: UInt, transitions: SquashedTransitions
     ) -> Self:
@@ -390,19 +428,14 @@ struct FastLookupTransitions[Iterable]:
             print("Invalid state for terminal count:", terminal_count)
             sys.exit(1)
 
-        # var lst = List[Optional[Plan]](capacity=terminal_count)
-        # for _ in range(terminal_count):
-        #     lst.append(None)
-
         var lst: List[Optional[Plan]] = [None for _ in range(terminal_count)]
         return Self(lst^)
 
-    fn iter(self) -> Int:
-        ...
-
     fn extend(mut self, other: SquashedTransitions):
-        for index, plan in other:
-            self.inner[index.inner] = plan
+        for it in other.items():
+            ref index = it.key
+            ref plan = it.value
+            self.inner[index.inner] = plan.copy()
 
     fn lookup(
         self, index: InternalSquashedType
