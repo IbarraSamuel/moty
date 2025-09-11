@@ -8,17 +8,20 @@ from parsa.automaton.rule import Rule
 from parsa.automaton.plan_mode import PlanMode
 from parsa.automaton.first_plan import FirstPlan
 
-alias NODE_START: Scalar[DType.uint16] = 1 << 15
-alias ERROR_RECOVERY_BIT: Scalar[DType.uint16] = 1 << 14
+alias NODE_START: UInt16 = 1 << 15
+alias ERROR_RECOVERY_BIT: UInt16 = 1 << 14
 
 alias SquashedTransitions = Dict[InternalSquashedType, Plan]
 alias InternalStrToToken = Dict[StaticString, InternalTerminalType]
 alias InternalStrToNode = Dict[StaticString, InternalNonterminalType]
 
+alias string = __mlir_type[`!kgen.string`]
+
 
 @fieldwise_init
-struct InternalSquashedType(Copyable, EqualityComparable, Hashable, Movable):
-    var inner: Scalar[DType.uint16]
+@register_passable("trivial")
+struct InternalSquashedType(EqualityComparable, Hashable):
+    var inner: UInt16
 
     @always_inline
     fn is_leaf(self) -> Bool:
@@ -49,8 +52,9 @@ trait Squashable:
 
 
 @fieldwise_init
-struct InternalNonterminalType(Copyable, Movable, Squashable):
-    var inner: Scalar[DType.uint16]
+@register_passable("trivial")
+struct InternalNonterminalType(Squashable):
+    var inner: UInt16
 
     fn __init__(out self):
         self.inner = 0
@@ -60,7 +64,8 @@ struct InternalNonterminalType(Copyable, Movable, Squashable):
 
 
 @fieldwise_init
-struct InternalTerminalType(Copyable, Movable, Squashable):
+@register_passable("trivial")
+struct InternalTerminalType(Squashable):
     var inner: UInt16
 
     fn __init__(out self):
@@ -88,6 +93,7 @@ struct DFAStateId:
     var inner: UInt
 
 
+@fieldwise_init
 struct NFAState(Copyable, Movable):
     var transitions: List[NFATransition]
 
@@ -106,6 +112,7 @@ struct DFAState(Copyable, Movable):
     var from_rule: StaticString
 
 
+@fieldwise_init
 struct NFATransition(Copyable, Movable):
     var type_: Optional[TransitionType]
     var to: NFAStateId
@@ -244,15 +251,19 @@ struct RuleAutomaton:
     var fallback_plans: List[UnsafePointer[Plan]]  # Should be a Box...
     var does_error_recovery: Bool
 
-    fn build(
+    fn build[
+        r: string
+    ](
         mut self,
         nonterminal_map: InternalStrToNode,
         terminal_map: InternalStrToToken,
         mut keywords: Keywords,
-        rule: Rule,
+        rule: Rule[r],
     ) -> (NFAStateId, NFAStateId):
         @parameter
-        fn _build(mut automaton: Self, rule: Rule) -> (NFAStateId, NFAStateId):
+        fn _build[
+            rr: string
+        ](mut automaton: Self, rule: Rule[rr]) -> (NFAStateId, NFAStateId):
             return automaton.build(
                 nonterminal_map, terminal_map, keywords, rule
             )
@@ -293,10 +304,12 @@ struct RuleAutomaton:
             return (start, end)
 
         elif rule is Rule.Or:
-            var rule1, rule2 = rebind[Rule.OrType](rule)[]
+            var rules = rebind[Rule.OrType](rule)[]
             var start, end = self.new_nfa_states()
-            for r in [rule1, rule2]:
-                var x, y = _build(self, r)
+
+            @parameter
+            for i in range(2):
+                var x, y = _build(self, rules[i])
                 self.add_empty_transition(start, x)
                 self.add_empty_transition(y, end)
             return (start, end)
@@ -370,18 +383,20 @@ struct RuleAutomaton:
         @parameter
         fn new() -> NFAStateId:
             var nfa_state = NFAState(transitions={})
-            self.nfa_states.push(nfa_states)
+            self.nfa_states.append(nfa_state^)
             return NFAStateId(len(self.nfa_states) - 1)
 
         return new(), new()
 
-    fn add_transition(
+    fn add_transition[
+        tt: string
+    ](
         mut self,
         start: NFAStateId,
         to: NFAStateId,
-        type_: Optional[TransitionType],
+        type_: Optional[TransitionType[tt]],
     ):
-        self.nfa_state_mut(start).transitions.push(NFATransition(type_, to))
+        self.nfa_state_mut(start).transitions.append(NFATransition(type_, to))
 
     fn add_empty_transition(mut self, start: NFAStateId, to: NFAStateId):
         self.add_transition(start, to, None)

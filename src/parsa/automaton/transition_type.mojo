@@ -29,7 +29,7 @@ struct TransitionType[
         var value_2: InternalNonterminalType = {},
         var value_3: StaticString = {},
     ):
-        self.inner = (value_1^, value_2^, value_3)
+        self.inner = (value_1, value_2, value_3)
 
     # Builders
     fn build(
@@ -38,7 +38,7 @@ struct TransitionType[
         # value_2: InternalNonterminalType,
         var value_3: StaticString,
     ) -> Self.TerminalType:
-        return {value_1^, {}, value_3}
+        return {value_1, {}, value_3}
 
     fn build(
         self: Self.NonterminalType,
@@ -46,7 +46,7 @@ struct TransitionType[
         var value_2: InternalNonterminalType,
         # value_3: StaticString,
     ) -> Self.NonterminalType:
-        return {{}, value_2^, {}}
+        return {{}, value_2, {}}
 
     fn build(
         self: Self.KeywordType,
