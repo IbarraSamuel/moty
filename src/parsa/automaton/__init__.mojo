@@ -918,8 +918,24 @@ fn create_left_recursion_plans(
     dfa_id: DFAStateId,
     first_plans: FirstPlans,
 ) -> SquashedTransitions:
-    ...
+    var plans = Dict[InternalSquashedType, Plans]()
+    ref automaton = automatons.get(automaton_key, {})
+    ref dfa_state = automaton.dfa_states[dfa_id.inner]
 
+    if dfa_state.is_final and not dfa_state.is_lookahead_end():
+        ref first_plan = first_plans[automaton.type_]
+        if first_plan is FirstPlan.Calculated:
+            is_left_recursive = first_plan.get()
+            if is_left_recursive:
+                for transition in automaton.dfa_states[0].transitions:
+                    if transition.type_ is TransitionType.Nonterminal and transition.type_.get() == automaton.type_:
+                        for t, p in transition.next_dfa().transition_to_plan:
+                            if t in plans:
+                                print("Ambiguous:", dfa_state.from_rule, "contains left recursion with alternatives!")
+
+                            plans.insert(t, Plan(p.pushes.copy(), p.next_dfa, t, p.debug_text, PlanMode.LeftRecursive()))
+
+    return plans^
 
 fn nest_plan(
     plan: Plan,
