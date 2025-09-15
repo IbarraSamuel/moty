@@ -898,7 +898,18 @@ fn add_if_no_conflict(
     token: InternalSquashedType,
     create_plan: fn () -> Plan,
 ):
-    ...
+    if token in conflict_tokens:
+        conflict_transitions.append(transition.type_)
+    else:
+        if token in plans and plans.setdefault(token, {}).type_ != transition.type_ :
+            ref t_x = plans.setdefault(token, {})
+            plans.pop(token)
+            conflict_tokens.add(token)
+            conflict_transitions.add(transition.type_)
+            conflict_transitions.add(t_x.type_)
+
+        plans[token] = (transition, create_plan())
+
 
 
 fn create_left_recursion_plans(
@@ -916,7 +927,9 @@ fn nest_plan(
     next_dfa: ArcPointer[DFAState],
     mode: StackMode,
 ) -> Plan:
-    ...
+    var pushes = plan.pushes.copy()
+    pushes.insert(0, Push(node_type=new_node_id, next_dfa=plan.next_dfa, stack_mode=mode))
+    return Plan(pushes, next_dfa, plan.type_, plan.debug_text, PlanMode.LL())
 
 
 fn calculate_peek_dfa[
@@ -925,7 +938,27 @@ fn calculate_peek_dfa[
     Pointer[DFAState, o],
     List[InternalSquashedType],
 ):
-    ...
+    ref dfa = transition.next_dfa()
+    ref lookahead_end = dfa.transitions[0].next_dfa()
+
+    debug_assert(lookahead_end.is_lookahead_end())
+    debug_assert(len(lookahead_end.transitions) == 1)
+
+    ref next_dfa = lookahead_end.transitions[0].next_dfa()
+
+    var terminals = List[InternalSquashedType]()
+    for transition in transitions:
+        if transition.type_ is TransitionType.Terminal:
+            var type_ = transition.type_.get[InternalTerminalType]()
+            terminals.append(type_.to_squashed())
+        elif transition.type_ is TransitionType.Keyword:
+            var keyword = transition.type_.get[StaticString]()
+            terminals.append(keywords.squashed(keyword).value())
+        else:
+            print("Only terminals lookaheads are allowed")
+            sys.exit(1)
+
+    return (next_dfa)
 
 
 fn search_lookahead_end[
@@ -1011,12 +1044,67 @@ fn split_tokens(
                     " automaton.split_tokens fn."
                 )
                 sys.exit(1)
+            while len(as_list[0]) > 0:
+                var nfa_id = as_list[0][0]
+                if nfa_id == must_be_smaller:
+                    print("nfa_id should be distinct than must_be_smaller")
+                    sys.exit(1)
+                if nfa_id.inner > must_be_smaller.inner:
+                    break
+                new_dfa_nfa_ids.append(as_list[0].pop(0))
+
+            if len(as_list[0]) == 0:
+                as_list.pop(0)
+
+        else:
+            new_dfa_nfa_ids.extend(as_list.pop())
+
+        if len(new_dfa_nfa_ids) == 0:
+            print("new_dfa_nfa_ids should not be empty")
+            sys.exit(1)
+
+        ref new_dfa = automaton.nfa_to_dfa(new_dfa_nfa_ids, automaton.nfa_end_id, dfa.list_index)
+        automaton.construct_powerset_for_dfa(new_dfa, automaton.nfa_end_id)
+
+        for generated_dfa_id in reversed(generated_dfa_ids):
+            ref higher_prio_dfa = automaton.dfa_states[generated_dfa_id.0]
+            var any_eq = False
+            for tt in higher_prio_dfa.transitions:
+                for t in new_dfa.transitions:
+                    if t.type_ == tt.type_:
+                        any_eq = True
+                        break
+
+                if any_eq:
+                    break
+
+            if any_eq:
+                panic_if_unreachable_transition(dfa, higher_prio_dfa)
+
+        generated_dfa_ids.append(new_dfa.list_index)       
 
     return (generated_dfa_ids^, end_dfa)
 
 
 fn panic_if_unreachable_transition(original_dfa: DFAState, split_dfa: DFAState):
-    ...
+    @parameter
+    fn check(mut already_checked: List[DFAStateId], original_dfa: DFAState, split_dfa: DFAState):
+        already_checked.append(split_dfa.list_index)
+        var t1 = [t.type_ for t in original_dfa.transitions]
+        var t2 = [t.type_ for t in split_dfa.transitions]
+        if t1 != t2 and split_dfa.is_final:
+            print("Find and unreachable alternative in the rule", original_dfa.from_rule)
+            sys.exit(1)
+
+        for t in split_dfa.transitions:
+            ref dfa = t.next_dfa()
+            if dfa.list_index not in already_checked:
+                for t2 in original_dfa.transitions:
+                    if t2.type_ == t.type_:
+                        check(already_checked, t2.next_dfa(), dfa)
+
+    var already_checked = List[DFAStateId]()
+    check(already_checked, original_dfa, split_dfa)
 
 
 fn nonterminal_to_str(
