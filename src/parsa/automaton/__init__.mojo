@@ -1,6 +1,7 @@
 from hashlib import Hasher
 from collections import Set
-from memory.owned_pointer import OwnedPointer
+from memory import OwnedPointer
+from memory import ArcPointer
 import sys
 
 from parsa.automaton.transition_type import TransitionType
@@ -12,16 +13,22 @@ alias NODE_START: UInt16 = 1 << 15
 alias ERROR_RECOVERY_BIT: UInt16 = 1 << 14
 
 alias SquashedTransitions = Dict[InternalSquashedType, Plan]
+alias Automatons = Dict[InternalNonterminalType, RuleAutomaton]
 alias InternalStrToToken = Dict[StaticString, InternalTerminalType]
 alias InternalStrToNode = Dict[StaticString, InternalNonterminalType]
+alias RuleMap = Dict[InternalNonterminalType, (StaticString, Rule)]
+alias SoftKeywords = Dict[InternalTerminalType, Set[StaticString]]
+alias FirstPlans = Dict[InternalNonterminalType, FirstPlan]
 
 alias string = __mlir_type[`!kgen.string`]
 
 
-@fieldwise_init
 @register_passable("trivial")
 struct InternalSquashedType(EqualityComparable, Hashable):
     var inner: UInt16
+
+    fn __init__(out self, inner: UInt16 = 0):
+        self.inner = inner
 
     @always_inline
     fn is_leaf(self) -> Bool:
@@ -53,11 +60,25 @@ trait Squashable:
 
 @fieldwise_init
 @register_passable("trivial")
-struct InternalNonterminalType(Squashable):
+struct InternalNonterminalType(
+    EqualityComparable, Hashable, Representable, Squashable, Writable
+):
     var inner: UInt16
 
     fn __init__(out self):
         self.inner = 0
+
+    fn write_to(self, mut w: Some[Writer]):
+        w.write("InternalNonterminalType(", self.inner, ")")
+
+    fn __repr__(self) -> String:
+        return String(self)
+
+    fn __eq__(self, other: Self) -> Bool:
+        return self.inner == other.inner
+
+    fn __hash__(self, mut h: Some[Hasher]):
+        h.update(self.inner)
 
     fn to_squashed(self) -> InternalSquashedType:
         return {self.inner}
@@ -65,20 +86,36 @@ struct InternalNonterminalType(Squashable):
 
 @fieldwise_init
 @register_passable("trivial")
-struct InternalTerminalType(Squashable):
+struct InternalTerminalType(
+    EqualityComparable, Hashable, Representable, Squashable, Writable
+):
     var inner: UInt16
 
     fn __init__(out self):
         self.inner = 0
 
+    fn write_to(self, mut w: Some[Writer]):
+        w.write("InternalTerminalType(", self.inner, ")")
+
+    fn __repr__(self) -> String:
+        return String(self)
+
+    fn __eq__(self, other: Self) -> Bool:
+        return self.inner == other.inner
+
+    fn __hash__(self, mut h: Some[Hasher]):
+        h.update(self.inner)
+
     fn to_squashed(self) -> InternalSquashedType:
         return {self.inner}
 
 
-@fieldwise_init
 @register_passable("trivial")
 struct NFAStateId(Copyable, EqualityComparable, Hashable, Movable):
     var inner: UInt
+
+    fn __init__(out self, inner: UInt = 0):
+        self.inner = inner
 
     fn __hash__(self, mut h: Some[Hasher]):
         h.update(self.inner)
@@ -89,13 +126,29 @@ struct NFAStateId(Copyable, EqualityComparable, Hashable, Movable):
 
 @fieldwise_init
 @register_passable("trivial")
-struct DFAStateId:
+struct DFAStateId(EqualityComparable, Hashable):
     var inner: UInt
+
+    fn __hash__(self, mut h: Some[Hasher]):
+        h.update(self.inner)
+
+    fn __eq__(self, other: Self) -> Bool:
+        return self.inner == other.inner
 
 
 @fieldwise_init
 struct NFAState(Copyable, Movable):
     var transitions: List[NFATransition]
+
+    fn is_lookahead_end(self) -> Bool:
+        for t in self.transitions:
+            if (
+                t.type_
+                and t.type_.value()
+                is materialize[TransitionType.LookaheadEnd]()
+            ):
+                return True
+        return False
 
 
 @fieldwise_init
@@ -111,53 +164,88 @@ struct DFAState(Copyable, Movable):
     var transition_to_plan: FastLookupTransitions
     var from_rule: StaticString
 
+    fn is_lookahead_end(self) -> Bool:
+        for t in self.transitions:
+            if t.type_ is materialize[TransitionType.LookaheadEnd]():
+                return True
+
+        return False
+
+    fn nonterminal_transition_ids(self) -> List[InternalNonterminalType]:
+        return [
+            t.type_.get[InternalNonterminalType]()
+            for t in self.transitions
+            if t.type_ is materialize[TransitionType.Nonterminal]()
+        ]
+
 
 @fieldwise_init
 struct NFATransition(Copyable, Movable):
     var type_: Optional[TransitionType]
     var to: NFAStateId
 
+    fn is_terminal_nonterminal_or_keyword(self) -> Bool:
+        return self.type_ and (
+            self.type_.value() is materialize[TransitionType.Terminal]()
+            or self.type_.value() is materialize[TransitionType.Nonterminal]()
+            or self.type_.value() is materialize[TransitionType.Keyword]()
+        )
 
-struct DFATransition[origin: MutableOrigin = MutableAnyOrigin](
-    Copyable, Movable
-):
+
+struct DFATransition(Copyable, Movable):
     var type_: TransitionType
-    var to: Pointer[DFAState, origin]
+    var to: Pointer[DFAState, MutableAnyOrigin]
+
+    fn __init__(out self, var type_: TransitionType, mut to: DFAState):
+        self.type_ = type_^
+        self.to = Pointer[DFAState, MutableAnyOrigin](to=to)
+
+    fn next_dfa(self) -> ref [self.to.origin] DFAState:
+        return self.to[]
 
 
-struct StackMode[
-    v: __mlir_type[`!kgen.string`] = __type_of("Invalid").value,
-](Writable, Copyable, Movable):
-    alias InvalidType = StackMode[]
-    alias AlternativeType = StackMode[v = __type_of("Alternative").value]
-    alias LLType = StackMode[v = __type_of("LL").value]
+struct StackMode(
+    EqualityComparable, Identifiable, ImplicitlyCopyable, Movable, Writable
+):
+    alias Invalid = Self()
+    alias Alternative = Self(0)
+    alias LL = Self(1)
 
-    alias Alternative = Self.AlternativeType()
-    alias LL = Self.LLType()
+    var _v: Int
+    var inner: UnsafePointer[Plan]
 
-    var inner: Optional[fn () -> Plan]
+    fn __eq__(self, other: Self) -> Bool:
+        return self._v == other._v and self.inner == other.inner
 
-    fn __init__(out self):
-        self.inner = None
+    fn __is__(self, other: Self) -> Bool:
+        return self._v == other._v
 
-    fn __init__(out self, v1: fn () -> Plan):
-        self.inner = None
+    fn __init__(out self, v: Int = -1):
+        self.inner = {}
+        self._v = v
 
-    fn build(
-        self: Self.AlternativeType, v: fn () -> Plan
-    ) -> Self.AlternativeType:
-        return {v}
+    fn __call__(self, plan: UnsafePointer[Plan] = {}) -> Self:
+        new_self = Self(self._v)
+        if self is materialize[Self.Alternative]() and plan != {}:
+            new_self.inner = plan
+        elif self is materialize[Self.LL]():
+            pass
+        else:
+            print("Invalid StackMode")
+            sys.exit(1)
+        return new_self^
 
-    fn build(self: Self.LLType) -> ref [self] Self.LLType:
-        return self
+    fn get(self) -> UnsafePointer[Plan]:
+        if self is materialize[Self.Alternative]():
+            return self.inner
 
-    fn __getitem__(self: Self.AlternativeType) -> fn () -> Plan:
-        return self.inner.value()
+        print("Invalid getter for StackMode")
+        sys.exit(1)
+        return self.inner
 
     fn write_to(self, mut w: Some[Writer]):
-        @parameter
-        if StringLiteral[v]() == "Alternative":
-            ref dfa = self.inner.value()().next_dfa()
+        if self is materialize[Self.Alternative]():
+            ref dfa = self.inner[].next_dfa()
             w.write(
                 "Alternative(",
                 dfa.from_rule,
@@ -169,13 +257,20 @@ struct StackMode[
             w.write("LL")
 
 
-struct Push(Copyable, Movable, Representable, Writable):
+struct Push(Copyable, EqualityComparable, Movable, Representable, Writable):
     var node_type: InternalNonterminalType
-    var next_dfa: fn () -> DFAState
+    var _next_dfa: Pointer[DFAState, MutableAnyOrigin]
     var stack_mode: StackMode
 
+    fn __eq__(self, other: Self) -> Bool:
+        return (
+            self.node_type == other.node_type
+            and self._next_dfa == other._next_dfa
+            and self.stack_mode == other.stack_mode
+        )
+
     fn write_to(self, mut w: Some[Writer]):
-        var dfa = self.next_dfa()
+        ref dfa = self.next_dfa()
         w.write(
             "Push(",
             "node_type:",
@@ -192,16 +287,27 @@ struct Push(Copyable, Movable, Representable, Writable):
     fn __repr__(self) -> String:
         return String(self)
 
+    fn next_dfa(self) -> ref [self._next_dfa.origin] DFAState:
+        return self._next_dfa[]
 
-struct Plan(Copyable, Movable, Writable):
+
+@fieldwise_init
+struct Plan(Copyable, EqualityComparable, Movable, Writable):
     var pushes: List[Push]
-    var next_dfa: fn () -> DFAState
+    var _next_dfa: Pointer[DFAState, MutableAnyOrigin]
     var type_: InternalSquashedType
     var mode: PlanMode
     var debug_text: StaticString
 
+    fn __eq__(self, other: Self) -> Bool:
+        return (
+            self.pushes == other.pushes
+            and self._next_dfa == other._next_dfa
+            and self.type_ == other.type_
+        )
+
     fn write_to(self, mut w: Some[Writer]):
-        var _dfa = self.next_dfa()
+        ref _dfa = self.next_dfa()
         # w.write("Push(pushes:")
         self.pushes.write_to(w)
         w.write(
@@ -218,8 +324,12 @@ struct Plan(Copyable, Movable, Writable):
             ")",
         )
 
+    fn next_dfa(self) -> ref [self._next_dfa.origin] DFAState:
+        return self._next_dfa[]
 
-struct Keywords:
+
+@fieldwise_init
+struct Keywords(Copyable, Movable):
     var counter: UInt
     var keywords: Dict[StaticString, InternalSquashedType]
 
@@ -240,71 +350,87 @@ struct Keywords:
         return self.keywords.get(keyword)
 
 
-struct RuleAutomaton:
+@fieldwise_init
+struct RuleAutomaton(Copyable, Movable):
     var type_: InternalNonterminalType
     var nfa_states: List[NFAState]
-    var dfa_states: List[UnsafePointer[DFAState]]  # sould be a Box...
+    var dfa_states: List[ArcPointer[DFAState]]  # sould be a Box...
     var name: StaticString
     var node_may_be_ommited: Bool
     var nfa_end_id: NFAStateId
     var no_transition_dfa_id: Optional[DFAStateId]
-    var fallback_plans: List[UnsafePointer[Plan]]  # Should be a Box...
+    var fallback_plans: List[ArcPointer[Plan]]  # Should be a Box...
     var does_error_recovery: Bool
 
-    fn build[
-        r: string
-    ](
+    fn __init__(out self):
+        self.type_ = {}
+        self.nfa_states = {}
+        self.dfa_states = {}
+        self.name = {}
+        self.node_may_be_ommited = {}
+        self.nfa_end_id = {}
+        self.no_transition_dfa_id = {}
+        self.fallback_plans = {}
+        self.does_error_recovery = {}
+
+    fn build(
         mut self,
         nonterminal_map: InternalStrToNode,
         terminal_map: InternalStrToToken,
         mut keywords: Keywords,
-        rule: Rule[r],
+        rule: Rule,
     ) -> (NFAStateId, NFAStateId):
         @parameter
-        fn _build[
-            rr: string
-        ](mut automaton: Self, rule: Rule[rr]) -> (NFAStateId, NFAStateId):
+        fn _build(mut automaton: Self, rule: Rule) -> (NFAStateId, NFAStateId):
             return automaton.build(
                 nonterminal_map, terminal_map, keywords, rule
             )
 
-        if rule is Rule.Identifier:
-            var string = rebind[Rule.IdentifierType](rule)[]
+        if rule is materialize[Rule.Identifier]():
+            var string = rule.get[StaticString]()
             var start, end = self.new_nfa_states()
             var t = terminal_map.get(string)
             if t:
                 self.add_transition(
-                    start, end, TransitionType.Terminal.build(t.value(), string)
+                    start,
+                    end,
+                    materialize[TransitionType.Terminal]()(
+                        terminal=t.value(), string=string
+                    ),
                 )
             elif nonterminal_map.get(string):
                 var nt = nonterminal_map.get(string)
                 self.add_transition(
-                    start, end, TransitionType.Nonterminal.build(nt.value())
+                    start,
+                    end,
+                    materialize[TransitionType.Nonterminal]()(
+                        nonterminal=nt.value()
+                    ),
                 )
             else:
                 print(
                     "No terminal / nonterminal found for",
                     string,
                     "; token map =",
-                    terminal_map,
+                    terminal_map.__str__(),
                     "; node map =",
-                    nonterminal_map,
+                    nonterminal_map.__str__(),
                 )
                 sys.exit(1)
 
             return (start, end)
 
         elif rule is Rule.Keyword:
-            var string = rebind[Rule.KeywordType](rule)[]
+            var string = rule.get[StaticString]()
             var start, end = self.new_nfa_states()
             self.add_transition(
-                start, end, TransitionType.Keyword.build(string)
+                start, end, TransitionType.Keyword(string=string)
             )
             keywords.add(string)
             return (start, end)
 
         elif rule is Rule.Or:
-            var rules = rebind[Rule.OrType](rule)[]
+            var rules = rule.get[(Rule, Rule)]()
             var start, end = self.new_nfa_states()
 
             @parameter
@@ -315,19 +441,19 @@ struct RuleAutomaton:
             return (start, end)
 
         elif rule is Rule.Maybe:
-            var rule1 = rebind[Rule.MaybeType](rule)[]
+            var rule1 = rule.get[Rule]()
             var start, end = _build(self, rule1)
             self.add_empty_transition(start, end)
             return (start, end)
 
         elif rule is Rule.Multiple:
-            var rule1 = rebind[Rule.MultipleType](rule)[]
+            var rule1 = rule.get[Rule]()
             var start, end = _build(self, rule1)
             self.add_empty_transition(end, start)
             return (start, end)
 
         elif rule is Rule.NegativeLookahead:
-            var rule1 = rebind[Rule.NegativeLookaheadType](rule)[]
+            var rule1 = rule.get[Rule]()
             var start, end = _build(self, rule1)
             var new_start, new_end = self.new_nfa_states()
             self.add_transition(
@@ -337,7 +463,7 @@ struct RuleAutomaton:
             return (new_start, new_end)
 
         elif rule is Rule.PositiveLookahead:
-            var rule1 = rebind[Rule.PositiveLookaheadType](rule)[]
+            var rule1 = rule.get[Rule]()
             var start, end = _build(self, rule1)
             var new_start, new_end = self.new_nfa_states()
             self.add_transition(
@@ -352,7 +478,7 @@ struct RuleAutomaton:
             sys.exit(1)
 
         elif rule is Rule.Next:
-            var rule1, rule2 = rebind[Rule.NextType](rule)[]
+            ref rule1, rule2 = rule.get[(Rule, Rule)]()
             var start1, end1 = _build(self, rule1)
             var start2, end2 = _build(self, rule2)
             # What is it doing here?
@@ -360,16 +486,17 @@ struct RuleAutomaton:
             return (start1, end2)
 
         elif rule is Rule.NodeMayBeOmmited:
-            var _rule = rebind[Rule.NodeMayBeOmmitedType](rule)[]
+            var _rule = rule.get[Rule]()
             self.node_may_be_ommited = True
             return _build(self, _rule)
         elif rule is Rule.DoesErrorRecovery:
-            var _rule = rebind[Rule.DoesErrorRecoveryType](rule)[]
+            var _rule = rule.get[Rule]()
             self.does_error_recovery = True
             return _build(self, _rule)
 
         print("Invalid Rule:", rule)
         sys.exit(1)
+        return ({-1}, {-1})
 
     fn nfa_state_mut(
         mut self, id: NFAStateId
@@ -388,13 +515,11 @@ struct RuleAutomaton:
 
         return new(), new()
 
-    fn add_transition[
-        tt: string
-    ](
+    fn add_transition(
         mut self,
         start: NFAStateId,
         to: NFAStateId,
-        type_: Optional[TransitionType[tt]],
+        type_: Optional[TransitionType],
     ):
         self.nfa_state_mut(start).transitions.append(NFATransition(type_, to))
 
@@ -406,19 +531,504 @@ struct RuleAutomaton:
         for nfa_state_id in nfa_state_ids:
             for transition in self.nfa_state(nfa_state_id).transitions:
                 if not transition.type_:
-                    set_.insert(transition.to)
+                    set_.add(transition.to)
                     if transition.to not in nfa_state_ids:
                         lst = [v for v in set_]
-                        set_.extend(self.group_nfas(lst^))
+                        set_.update(self.group_nfas(lst^))
 
-        return set_
+        return set_^
+
+    fn nfa_to_dfa(
+        mut self,
+        starts: List[NFAStateId],
+        end: NFAStateId,
+        from_alternative_list_index: Optional[DFAStateId],
+    ) -> ArcPointer[DFAState]:
+        """TODO: Check if this correctly handles the origins."""
+        var grouped_nfas = self.group_nfas(starts)
+        for ref dfa_state in self.dfa_states:
+            if dfa_state[].nfa_set == grouped_nfas:
+                return dfa_state
+
+        var some_is_end = [
+            self.nfa_state(nfa_id).is_lookahead_end() for nfa_id in grouped_nfas
+        ]
+        var is_final = end in grouped_nfas and any(some_is_end)
+
+        dfa_state = DFAState(
+            nfa_set=grouped_nfas^,
+            is_final=is_final,
+            is_calculated=False,
+            list_index=DFAStateId(len(self.dfa_states)),
+            from_alternative_list_index=from_alternative_list_index,
+            node_may_be_omitted=self.node_may_be_ommited,
+            from_rule=self.name,
+            transition_to_plan=FastLookupTransitions.new_empty(),
+            transitions={},
+        )
+
+        self.dfa_states.append(ArcPointer(dfa_state^))
+        return self.dfa_states[-1]
+
+    fn construct_powerset(mut self, start: NFAStateId, end: NFAStateId):
+        var dfa = self.nfa_to_dfa([start], end, None)
+        # self.construct_powerset_for_dfa(dfa, end)
+
+    fn construct_powerset_for_dfa(mut self, mut dfa: DFAState, end: NFAStateId):
+        ref state = dfa
+        if state.is_calculated:
+            return
+
+        var grouped_transitions = Dict[TransitionType, List[NFAStateId]]()
+        nfa_list = [nfa for nfa in state.nfa_set]
+
+        @parameter
+        fn s(a: NFAStateId, b: NFAStateId) -> Bool:
+            return a.inner < b.inner
+
+        sort[s](nfa_list)
+
+        for nfa_state_id in nfa_list:
+            ref n = self.nfa_state(nfa_state_id)
+            for transition in n.transitions:
+                if transition.type_:
+                    # TODO: Verify this logic.
+                    ref t = transition.type_.value()
+                    ref state_ids = grouped_transitions.setdefault(t, [])
+                    if transition.is_terminal_nonterminal_or_keyword():
+                        state_ids.append(transition.to)
+                    else:
+                        state_ids = [transition.to]
+
+        var transitions = [
+            DFATransition(it.key.copy(), self.nfa_to_dfa(it.value, end, None)[])
+            for it in grouped_transitions.items()
+        ]
+
+        state.transitions = transitions.copy()
+        state.is_calculated = True
+        for ref transition in transitions:
+            self.construct_powerset_for_dfa(transition.to[], end)
+
+        state.is_final |= any(
+            [
+                t.type_ is TransitionType.NegativeLookaheadStart
+                and search_lookahead_end(t.next_dfa()).is_final
+                for t in state.transitions
+            ]
+        )
+
+    fn add_no_transition_dfa_if_necessary(mut self):
+        # var any_negative = any(
+        #     [
+        #         any(
+        #             [
+        #                 t.type_
+        #                 and t.type_.value()
+        #                 is TransitionType.NegativeLookaheadStart
+        #                 for t in v.transitions
+        #             ]
+        #         )
+        #         for v in self.nfa_states
+        #     ]
+        # )
+        var any_negative = False
+        for st in self.nfa_states:
+            for t in st.transitions:
+                if (
+                    t.type_
+                    and t.type_.value() is TransitionType.NegativeLookaheadStart
+                ):
+                    any_negative = True
+                    break
+            if any_negative:
+                break
+
+        if any_negative:
+            var list_index = DFAStateId(len(self.dfa_states))
+            var dfa_state = DFAState(
+                nfa_set={},
+                is_final=False,
+                is_calculated=True,
+                list_index=list_index,
+                from_alternative_list_index=None,
+                node_may_be_omitted=self.node_may_be_ommited,
+                from_rule=self.name,
+                transition_to_plan=FastLookupTransitions.new_empty(),
+                transitions={},
+            )
+            self.dfa_states.append(ArcPointer(dfa_state^))
+            self.no_transition_dfa_id = list_index
 
     # TODO: MISSING
-    # nfa_to_dfa
-    # construct_powerset
-    # construct_powerset_for_dfa
-    # add_no_transition_dfa_if_neccessary
     # illustrate_dfa
+
+
+fn generate_automatons(
+    nonterminal_map: InternalStrToNode,
+    terminal_map: InternalStrToToken,
+    rules: RuleMap,
+    soft_keywords: SoftKeywords,
+) -> (Automatons, Keywords):
+    var keywords = Keywords(counter=len(terminal_map), keywords={})
+    var automatons = Dict[InternalNonterminalType, RuleAutomaton]()
+
+    for it in rules.items():
+        ref internal_type = it.key
+        ref rule_name, rule = it.value
+
+        var automaton = RuleAutomaton(
+            type_=internal_type,
+            name=rule_name,
+            nfa_states={},
+            dfa_states={},
+            node_may_be_ommited={},
+            nfa_end_id={},
+            no_transition_dfa_id={},
+            fallback_plans={},
+            does_error_recovery={},
+        )
+
+        var start, end = automaton.build(
+            nonterminal_map, terminal_map, keywords, rule
+        )
+        automaton.nfa_end_id = end
+        automaton.construct_powerset(start, end)
+        automaton.add_no_transition_dfa_if_necessary()
+        automatons[internal_type] = automaton^
+
+    var terminal_count = keywords.counter
+
+    var first_plans = Dict[InternalNonterminalType, FirstPlan]()
+    var rule_labels = automatons.keys()
+
+    for rule_label in rule_labels:
+        create_first_plans(
+            nonterminal_map,
+            keywords,
+            soft_keywords,
+            first_plans,
+            automatons,
+            rule_label,
+        )
+
+        ref automaton = automatons.get(rule_label).value()
+        if automaton.dfa_states[0][].is_final:
+            print(
+                "The rule ",
+                automaton.name,
+                " must not have an empty production",
+            )
+            sys.exit(1)
+
+        ref rl = first_plans.get(rule_label).value()
+        if rl is materialize[FirstPlan.Calculated]():
+            ref plans, _ = rl.get()
+            automaton.dfa_states[
+                0
+            ][].transition_to_plan = FastLookupTransitions.from_plans(
+                terminal_count, plans.copy()
+            )
+        else:
+            print("Unreachable code while generating automatons.")
+            sys.exit(1)
+
+    for rule_label in rule_labels:
+        for i in range(1, len(automatons.get(rule_label).value().dfa_states)):
+            ref plans, _ = plans_for_dfa(
+                nonterminal_map,
+                keywords,
+                soft_keywords,
+                automatons,
+                first_plans,
+                rule_label,
+                DFAStateId(i),
+                False,
+            )
+            automatons.get(rule_label).value().dfa_states[
+                i
+            ][].transition_to_plan = FastLookupTransitions.from_plans(
+                terminal_count, plans
+            )
+        for i in range(1, len(automatons.get(rule_label).value().dfa_states)):
+            var left_recursion_plans = create_left_recursion_plans(
+                automatons, rule_label, DFAStateId(i), first_plans
+            )
+            var dfa = automatons.get(rule_label).value().dfa_states[i]
+            if len(dfa[].transition_to_plan.inner) == 0:
+                dfa[].transition_to_plan = FastLookupTransitions.from_plans(
+                    terminal_count, left_recursion_plans
+                )
+            else:
+                dfa[].transition_to_plan.extend(left_recursion_plans)
+
+    return (automatons^, keywords^)
+
+
+fn create_first_plans(
+    nonterminal_map: InternalStrToNode,
+    keywords: Keywords,
+    soft_keywords: SoftKeywords,
+    mut first_plans: FirstPlans,
+    mut automatons: Automatons,
+    automaton_key: InternalNonterminalType,
+):
+    if not first_plans.get(automaton_key):
+        first_plans[automaton_key] = materialize[FirstPlan.Calculating]()()
+        ref plans, is_left_recursive = plans_for_dfa(
+            nonterminal_map,
+            keywords,
+            soft_keywords,
+            automatons,
+            first_plans,
+            automaton_key,
+            DFAStateId(0),
+            True,
+        )
+        if is_left_recursive and len(plans) == 0:
+            print(
+                (
+                    "The grammar contains left recursion without an alternative"
+                    " for rule"
+                ),
+                nonterminal_to_str(nonterminal_map, automaton_key),
+            )
+
+        first_plans[automaton_key] = materialize[FirstPlan.Calculated]()(
+            plans=plans.copy(), is_left_recursive=is_left_recursive
+        )
+
+
+fn plans_for_dfa(
+    nonterminal_map: InternalStrToNode,
+    keywords: Keywords,
+    soft_keywords: SoftKeywords,
+    mut automatons: Automatons,
+    mut first_plans: FirstPlans,
+    automaton_key: InternalNonterminalType,
+    dfa_id: DFAStateId,
+    is_first_plan: Bool,
+) -> (SquashedTransitions, Bool):
+    var conflict_tokens = Set[InternalSquashedType]()
+    var conflict_transitions = Set[TransitionType]()
+
+    var plans = Dict[InternalSquashedType, (DFATransition, Plan)]()
+    var is_left_recursive = False
+
+    ref dfa_state = automatons.setdefault(automaton_key, {}).dfa_states[
+        dfa_id.inner
+    ]
+
+    for transition in dfa_state[].transitions:
+        if transition.type_ is TransitionType.Terminal:
+            ...
+        elif transition.type_ is TransitionType.Nonterminal:
+            ...
+        elif transition.type_ is TransitionType.Keyword:
+            ...
+        elif transition.type_ is TransitionType.PositiveLookaheadStart:
+            ...
+        elif transition.type_ is TransitionType.NegativeLookaheadStart:
+            ...
+        elif transition.type_ is TransitionType.LookaheadEnd:
+            continue
+
+    for c in conflict_tokens:
+        if c in plans:
+            print("Assertion error on plans_for_dfa")
+            sys.exit(1)
+
+    var result = {it.key: it.value[1].copy() for it in plans.items()}
+
+    if len(conflict_tokens) > 0:
+        ref automaton = automatons.setdefault(automaton_key, {})
+        ref generated_dfa_ids, end = split_tokens(
+            automaton, dfa_state[].copy(), conflict_transitions
+        )
+        var t = automaton.type_
+
+        for dfa_id in reversed(generated_dfa_ids):
+            ref new_plans, left_recursive = plans_for_dfa(
+                nonterminal_map,
+                keywords,
+                soft_keywords,
+                automatons,
+                first_plans,
+                automaton_key,
+                dfa_id,
+                is_first_plan,
+            )
+
+            if left_recursive:
+                print("Assert error on left_recursive")
+                sys.exit(1)
+
+            for it in new_plans.items():
+                ref transition = it.key
+                var new_plan = it.value.copy()
+                if transition in conflict_tokens:
+                    try:
+                        var fallback_plan = result.pop(transition)
+                        ref automaton = automatons.setdefault(automaton_key, {})
+                        automaton.fallback_plans.append(
+                            ArcPointer(fallback_plan^)
+                        )
+                        new_plan = nest_plan(
+                            new_plan,
+                            t,
+                            end,
+                            StackMode.Alternative(
+                                plan=UnsafePointer(
+                                    to=automaton.fallback_plans[-1][]
+                                )
+                            ),
+                        )
+                    except:
+                        pass
+
+                    result[transition] = new_plan^
+    return (result^, is_left_recursive)
+
+
+fn add_if_no_conflict(
+    mut plans: Dict[InternalSquashedType, (DFATransition, Plan)],
+    mut conflict_transitions: Set[TransitionType],
+    mut conflict_tokens: Set[InternalSquashedType],
+    transition: DFATransition,
+    token: InternalSquashedType,
+    create_plan: fn () -> Plan,
+):
+    ...
+
+
+fn create_left_recursion_plans(
+    automatons: Automatons,
+    automaton_key: InternalNonterminalType,
+    dfa_id: DFAStateId,
+    first_plans: FirstPlans,
+) -> SquashedTransitions:
+    ...
+
+
+fn nest_plan(
+    plan: Plan,
+    next_node_id: InternalNonterminalType,
+    next_dfa: ArcPointer[DFAState],
+    mode: StackMode,
+) -> Plan:
+    ...
+
+
+fn calculate_peek_dfa[
+    o: Origin
+](ref [o]keywords: Keywords, ref [o]transition: DFATransition) -> (
+    Pointer[DFAState, o],
+    List[InternalSquashedType],
+):
+    ...
+
+
+fn search_lookahead_end[
+    o: Origin
+](ref [o]dfa_state: DFAState) -> ref [o] DFAState:
+    var already_checked = Set[DFAStateId]()
+    already_checked.add(dfa_state.list_index)
+
+    @parameter
+    fn search[
+        o: Origin
+    ](mut already_checked: Set[DFAStateId], ref [o]dfa_state: DFAState) -> ref [
+        o
+    ] DFAState:
+        for transition in dfa_state.transitions:
+            if transition.type_ is TransitionType.LookaheadEnd:
+                return transition.next_dfa()
+            elif (
+                transition.type_ is TransitionType.PositiveLookaheadStart
+                or transition.type_ is TransitionType.NegativeLookaheadStart
+            ):
+                print("Unimplemented lookahead end search")
+                sys.exit(1)
+            else:
+                ref to_dfa = transition.next_dfa()
+                if to_dfa.list_index not in already_checked:
+                    already_checked.add(to_dfa.list_index)
+                    return search(already_checked, to_dfa)
+        print("This should be unreachable.")
+        sys.exit(1)
+
+        # NOTE: This never runs
+        return dfa_state.transitions[0].next_dfa()
+
+    return search(already_checked, dfa_state)
+
+
+fn split_tokens(
+    mut automaton: RuleAutomaton,
+    dfa: DFAState,
+    conflict_transitions: Set[TransitionType],
+) -> (List[DFAStateId], ArcPointer[DFAState]):
+    var transition_to_nfas = Dict[TransitionType, List[NFAStateId]]()
+    var nfas = [v for v in dfa.nfa_set]
+
+    @parameter
+    fn sort_fn(v: NFAStateId, v2: NFAStateId) -> Bool:
+        return v.inner > v2.inner
+
+    sort[cmp_fn=sort_fn](nfas)
+
+    for nfa_id in nfas:
+        ref nfa = automaton.nfa_states[nfa_id.inner]
+        for transition in nfa.transitions:
+            ref opt_t = transition.type_
+            if opt_t and opt_t.value() in conflict_transitions:
+                t = opt_t.value()
+                try:
+                    ref lst = transition_to_nfas[t]
+                    lst.append(nfa_id)
+                except:
+                    transition_to_nfas[t] = [nfa_id]
+
+    var generated_dfa_ids = List[DFAStateId]()
+    var end_dfa = automaton.nfa_to_dfa(
+        [automaton.nfa_end_id], automaton.nfa_end_id, None
+    )
+
+    var as_list = [t.copy() for t in transition_to_nfas.values()]
+
+    @parameter
+    fn sort_transition(v: List[NFAStateId], v2: List[NFAStateId]) -> Bool:
+        return v[0].inner > v2[0].inner
+
+    while len(as_list) > 0:
+        sort[cmp_fn=sort_transition](as_list)
+        var new_dfa_nfa_ids = List[NFAStateId]()
+        if len(as_list) > 1:
+            var must_be_smaller = as_list[1][0]
+            if len(as_list[0]) == 0:
+                print(
+                    "This should not be possible.Assertion Error on"
+                    " automaton.split_tokens fn."
+                )
+                sys.exit(1)
+
+    return (generated_dfa_ids^, end_dfa)
+
+
+fn panic_if_unreachable_transition(original_dfa: DFAState, split_dfa: DFAState):
+    ...
+
+
+fn nonterminal_to_str(
+    nonterminal_map: InternalStrToNode, nonterminal: InternalNonterminalType
+) -> StaticString:
+    for it in nonterminal_map.items():
+        if nonterminal == it.value:
+            return it.key
+
+    print("Something is very wrong, integer not found.", nonterminal)
+    sys.exit(1)
+    return {}
 
 
 # TODO: Should implement iterator but I will iterate the inner list and ignore None values. That's all.
@@ -433,7 +1043,7 @@ struct FastLookupTransitions(Copyable, Movable):
 
     @staticmethod
     fn new_empty() -> Self:
-        self = Self()
+        return Self()
 
     @staticmethod
     fn from_plans(

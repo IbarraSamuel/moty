@@ -1,23 +1,18 @@
 @register_passable("trivial")
-struct PlanMode[v: __mlir_type[`!kgen.string`] = __type_of("Invalid").value](
-    EqualityComparable, Writable
-):
-    alias Invalid = PlanMode[]()
+struct PlanMode(Identifiable, Writable):
+    alias Invalid = PlanMode()
 
-    alias LeftRecursive = PlanMode[__type_of("LeftRecursive").value]()
-    alias LL = PlanMode[__type_of("LL").value]()
-    alias PositivePeek = PlanMode[__type_of("PositivePeek").value]()
+    alias LeftRecursive = PlanMode(0)
+    alias LL = PlanMode(1)
+    alias PositivePeek = PlanMode(2)
 
-    alias value = StringLiteral[v]()
+    var _v: Int
 
-    fn __init__(out self):
-        pass
+    fn __init__(out self, v: Int = -1):
+        self._v = v
 
-    fn __eq__(self, other: Self) -> Bool:
-        return True
-
-    fn __eq__(self, other: PlanMode) -> Bool:
-        return False
+    fn __is__(self, other: Self) -> Bool:
+        return self._v == other._v
 
     fn write_to(self, mut w: Some[Writer]):
-        w.write("PlanMode(", Self.value, ")")
+        w.write("PlanMode(", self._v, ")")
