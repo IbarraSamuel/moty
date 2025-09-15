@@ -22,6 +22,11 @@ alias FirstPlans = Dict[InternalNonterminalType, FirstPlan]
 
 alias string = __mlir_type[`!kgen.string`]
 
+# TODO THINGS:
+# 1. move out all these Materialize things.
+# 2. Fix pointers issue with Pointers, UnsafePointers, ArcPointers, etc.
+# 3. Use abort instead of these sys.exit(1) things, because those will not expose the place where the issue happened.
+
 
 @register_passable("trivial")
 struct InternalSquashedType(EqualityComparable, Hashable):
@@ -257,6 +262,7 @@ struct StackMode(
             w.write("LL")
 
 
+@fieldwise_init
 struct Push(Copyable, EqualityComparable, Movable, Representable, Writable):
     var node_type: InternalNonterminalType
     var _next_dfa: Pointer[DFAState, MutableAnyOrigin]
@@ -354,12 +360,12 @@ struct Keywords(Copyable, Movable):
 struct RuleAutomaton(Copyable, Movable):
     var type_: InternalNonterminalType
     var nfa_states: List[NFAState]
-    var dfa_states: List[ArcPointer[DFAState]]  # sould be a Box...
+    var dfa_states: List[ArcPointer[DFAState]]  # sould be a Box?
     var name: StaticString
     var node_may_be_ommited: Bool
     var nfa_end_id: NFAStateId
     var no_transition_dfa_id: Optional[DFAStateId]
-    var fallback_plans: List[ArcPointer[Plan]]  # Should be a Box...
+    var fallback_plans: List[ArcPointer[Plan]]  # Should be a Box?
     var does_error_recovery: Bool
 
     fn __init__(out self):
@@ -572,7 +578,7 @@ struct RuleAutomaton(Copyable, Movable):
 
     fn construct_powerset(mut self, start: NFAStateId, end: NFAStateId):
         var dfa = self.nfa_to_dfa([start], end, None)
-        # self.construct_powerset_for_dfa(dfa, end)
+        self.construct_powerset_for_dfa(dfa[], end)
 
     fn construct_powerset_for_dfa(mut self, mut dfa: DFAState, end: NFAStateId):
         ref state = dfa
@@ -820,17 +826,189 @@ fn plans_for_dfa(
     ]
 
     for transition in dfa_state[].transitions:
-        if transition.type_ is TransitionType.Terminal:
-            ...
-        elif transition.type_ is TransitionType.Nonterminal:
-            ...
-        elif transition.type_ is TransitionType.Keyword:
-            ...
-        elif transition.type_ is TransitionType.PositiveLookaheadStart:
-            ...
-        elif transition.type_ is TransitionType.NegativeLookaheadStart:
-            ...
-        elif transition.type_ is TransitionType.LookaheadEnd:
+        ref ttype = transition.type_
+        if ttype is TransitionType.Terminal:
+            ref type_, debug_text = ttype.get[
+                (InternalTerminalType, StaticString)
+            ]()
+            var t = type_.to_squashed()
+
+            @parameter
+            fn new_plan() -> Plan:
+                return Plan(
+                    pushes=[],
+                    _next_dfa=transition.to,
+                    type_=t,
+                    debug_text=debug_text,
+                    mode=PlanMode.LL,
+                )
+
+            add_if_no_conflict[new_plan](
+                plans,
+                conflict_transitions,
+                conflict_tokens,
+                transition.copy(),
+                t,
+                # new_plan,
+            )
+
+            try:
+                ref kws = soft_keywords[type_]
+                for kw in kws:
+                    var soft_keyword_type = keywords.squashed(kw).value()
+                    add_if_no_conflict[new_plan](
+                        plans,
+                        conflict_transitions,
+                        conflict_tokens,
+                        DFATransition(
+                            type_=TransitionType.Keyword(string=kw),
+                            to=transition.to[],
+                        ),
+                        soft_keyword_type,
+                        # create_plan,
+                    )
+            except:
+                pass
+
+        elif ttype is TransitionType.Nonterminal:
+            ref node_id = ttype.get[InternalNonterminalType]()
+            if is_first_plan:
+                try:
+                    if (
+                        first_plans[node_id]
+                        is materialize[FirstPlan.Calculating]()
+                    ):
+                        if node_id != automaton_key:
+                            print(
+                                (
+                                    "Indirect left recursion not supported (in"
+                                    " rule "
+                                ),
+                                nonterminal_to_str(
+                                    nonterminal_map, automaton_key
+                                ),
+                                ")",
+                            )
+                            sys.exit(1)
+                        is_left_recursive = True
+                        continue
+                except:
+                    pass
+
+                create_first_plans(
+                    nonterminal_map,
+                    keywords,
+                    soft_keywords,
+                    first_plans,
+                    automatons,
+                    node_id,
+                )
+
+            try:
+                ref fp = first_plans[node_id]
+                if fp is materialize[FirstPlan.Calculated]():
+                    ref transitions = fp.get()[0]
+                    for it in transitions.items():
+                        ref t = it.key
+                        # ref nested_plan = it.value
+
+                        @parameter
+                        fn create_plan() -> Plan:
+                            return nest_plan(
+                                it.value,  # this is nested_plan, but I removed to get rid of a warning
+                                node_id,
+                                transition.to,
+                                StackMode.LL,
+                            )
+
+                        add_if_no_conflict[create_plan](
+                            plans,
+                            conflict_transitions,
+                            conflict_tokens,
+                            transition.copy(),
+                            t,
+                            # create_plan,
+                        )
+
+                elif fp is materialize[FirstPlan.Calculating]():
+                    print("this should be unreachable")
+                    sys.exit(1)
+            except:
+                pass
+
+        elif ttype is TransitionType.Keyword:
+            ref keyword = ttype.get[StaticString]()
+            var t = keywords.squashed(keyword).value()
+
+            @parameter
+            fn create_other_plan() -> Plan:
+                return Plan(
+                    pushes=[],
+                    _next_dfa=transition.to,
+                    type_=t,
+                    debug_text=keyword,
+                    mode=PlanMode.LL,
+                )
+
+            add_if_no_conflict[create_other_plan](
+                plans,
+                conflict_transitions,
+                conflict_tokens,
+                transition.copy(),
+                t,
+                # create_plan,
+            )
+
+        elif ttype is TransitionType.PositiveLookaheadStart:
+            ref next_dfa, peek_terminals = calculate_peek_dfa(
+                keywords, transition
+            )
+            for t in peek_terminals:
+                plans[t] = (
+                    transition.copy(),
+                    Plan(
+                        debug_text="positive lookahead",
+                        mode=PlanMode.PositivePeek,
+                        _next_dfa=next_dfa,
+                        pushes=[],
+                        type_=t,
+                    ),
+                )
+        elif ttype is TransitionType.NegativeLookaheadStart:
+            ref next_dfa, peek_terminals = calculate_peek_dfa(
+                keywords, transition
+            )
+            var next_plans = plans_for_dfa(
+                nonterminal_map,
+                keywords,
+                soft_keywords,
+                automatons,
+                first_plans,
+                automaton_key,
+                next_dfa[].list_index,
+                is_first_plan,
+            )[0].copy()
+            for t in peek_terminals:
+                try:
+                    ref automaton = automatons[automaton_key]
+                    ref empty_dfa_id = automaton.no_transition_dfa_id.value()
+                    next_plans[t] = Plan(
+                        debug_text="Negative lookahead abort",
+                        mode=PlanMode.LL,
+                        _next_dfa=Pointer[origin=MutableAnyOrigin](
+                            to=automaton.dfa_states[empty_dfa_id.inner][]
+                        ),
+                        pushes=[],
+                        type_=t,
+                    )
+                except:
+                    pass
+
+            plans |= {
+                it.key: (transition.copy(), it.value.copy())
+                for it in next_plans.items()
+            }
+        elif ttype is TransitionType.LookaheadEnd:
             continue
 
     for c in conflict_tokens:
@@ -876,7 +1054,7 @@ fn plans_for_dfa(
                         new_plan = nest_plan(
                             new_plan,
                             t,
-                            end,
+                            Pointer[origin=MutableAnyOrigin](to=end[]),
                             StackMode.Alternative(
                                 plan=UnsafePointer(
                                     to=automaton.fallback_plans[-1][]
@@ -890,26 +1068,30 @@ fn plans_for_dfa(
     return (result^, is_left_recursive)
 
 
-fn add_if_no_conflict(
+fn add_if_no_conflict[
+    create_plan: fn () capturing -> Plan
+](
     mut plans: Dict[InternalSquashedType, (DFATransition, Plan)],
     mut conflict_transitions: Set[TransitionType],
     mut conflict_tokens: Set[InternalSquashedType],
-    transition: DFATransition,
+    var transition: DFATransition,
     token: InternalSquashedType,
-    create_plan: fn () -> Plan,
+    # create_plan: fn () capturing -> Plan,
 ):
     if token in conflict_tokens:
-        conflict_transitions.append(transition.type_)
+        conflict_transitions.add(transition.type_)
     else:
-        if token in plans and plans.setdefault(token, {}).type_ != transition.type_ :
-            ref t_x = plans.setdefault(token, {})
-            plans.pop(token)
-            conflict_tokens.add(token)
-            conflict_transitions.add(transition.type_)
-            conflict_transitions.add(t_x.type_)
+        try:
+            ref t_x = plans[token][0]
+            if t_x.type_ != transition.type_:
+                _ = plans.pop(token)
+                conflict_tokens.add(token)
+                conflict_transitions.add(transition.type_)
+                conflict_transitions.add(t_x.type_)
+        except:
+            pass
 
-        plans[token] = (transition, create_plan())
-
+        plans[token] = (transition^, create_plan())
 
 
 fn create_left_recursion_plans(
@@ -918,42 +1100,76 @@ fn create_left_recursion_plans(
     dfa_id: DFAStateId,
     first_plans: FirstPlans,
 ) -> SquashedTransitions:
-    var plans = Dict[InternalSquashedType, Plans]()
+    var plans = Dict[InternalSquashedType, Plan]()
     ref automaton = automatons.get(automaton_key, {})
     ref dfa_state = automaton.dfa_states[dfa_id.inner]
 
-    if dfa_state.is_final and not dfa_state.is_lookahead_end():
-        ref first_plan = first_plans[automaton.type_]
-        if first_plan is FirstPlan.Calculated:
-            is_left_recursive = first_plan.get()
+    if dfa_state[].is_final and not dfa_state[].is_lookahead_end():
+        ref first_plan = first_plans.get(automaton.type_).value()
+        if first_plan is materialize[FirstPlan.Calculated]():
+            ref is_left_recursive = first_plan.get()[1]
             if is_left_recursive:
-                for transition in automaton.dfa_states[0].transitions:
-                    if transition.type_ is TransitionType.Nonterminal and transition.type_.get() == automaton.type_:
-                        for t, p in transition.next_dfa().transition_to_plan:
+                for transition in automaton.dfa_states[0][].transitions:
+                    if (
+                        transition.type_ is TransitionType.Nonterminal
+                        and transition.type_.get[InternalNonterminalType]()
+                        == automaton.type_
+                    ):
+                        for i, opt_p in enumerate(
+                            transition.next_dfa().transition_to_plan.inner
+                        ):
+                            if not opt_p:
+                                continue
+                            var t = InternalSquashedType(i)
+                            ref p = opt_p.value()
                             if t in plans:
-                                print("Ambiguous:", dfa_state.from_rule, "contains left recursion with alternatives!")
-
-                            plans.insert(t, Plan(p.pushes.copy(), p.next_dfa, t, p.debug_text, PlanMode.LeftRecursive()))
+                                print(
+                                    "Ambiguous:",
+                                    dfa_state[].from_rule,
+                                    (
+                                        "contains left recursion with"
+                                        " alternatives!"
+                                    ),
+                                )
+                            var dfa_state_ptr = Pointer(to=p.next_dfa())
+                            plans[t] = Plan(
+                                pushes=p.pushes.copy(),
+                                _next_dfa=dfa_state_ptr,
+                                type_=t,
+                                debug_text=p.debug_text,
+                                mode=PlanMode.LeftRecursive,
+                            )
 
     return plans^
 
+
 fn nest_plan(
     plan: Plan,
-    next_node_id: InternalNonterminalType,
-    next_dfa: ArcPointer[DFAState],
+    new_node_id: InternalNonterminalType,
+    next_dfa: Pointer[DFAState, MutableAnyOrigin],
     mode: StackMode,
 ) -> Plan:
     var pushes = plan.pushes.copy()
-    pushes.insert(0, Push(node_type=new_node_id, next_dfa=plan.next_dfa, stack_mode=mode))
-    return Plan(pushes, next_dfa, plan.type_, plan.debug_text, PlanMode.LL())
+    pushes.insert(
+        0,
+        Push(
+            node_type=new_node_id,
+            _next_dfa=Pointer(to=plan.next_dfa()),
+            stack_mode=mode,
+        ),
+    )
+    return Plan(
+        pushes=pushes^,
+        _next_dfa=Pointer(to=next_dfa[]),
+        type_=plan.type_,
+        debug_text=plan.debug_text,
+        mode=PlanMode.LL,
+    )
 
 
-fn calculate_peek_dfa[
-    o: Origin
-](ref [o]keywords: Keywords, ref [o]transition: DFATransition) -> (
-    Pointer[DFAState, o],
-    List[InternalSquashedType],
-):
+fn calculate_peek_dfa(
+    keywords: Keywords, transition: DFATransition
+) -> (Pointer[DFAState, MutableAnyOrigin], List[InternalSquashedType],):
     ref dfa = transition.next_dfa()
     ref lookahead_end = dfa.transitions[0].next_dfa()
 
@@ -963,7 +1179,7 @@ fn calculate_peek_dfa[
     ref next_dfa = lookahead_end.transitions[0].next_dfa()
 
     var terminals = List[InternalSquashedType]()
-    for transition in transitions:
+    for transition in dfa.transitions:
         if transition.type_ is TransitionType.Terminal:
             var type_ = transition.type_.get[InternalTerminalType]()
             terminals.append(type_.to_squashed())
@@ -974,7 +1190,7 @@ fn calculate_peek_dfa[
             print("Only terminals lookaheads are allowed")
             sys.exit(1)
 
-    return (next_dfa)
+    return (Pointer(to=next_dfa), terminals^)
 
 
 fn search_lookahead_end[
@@ -1070,7 +1286,7 @@ fn split_tokens(
                 new_dfa_nfa_ids.append(as_list[0].pop(0))
 
             if len(as_list[0]) == 0:
-                as_list.pop(0)
+                _ = as_list.pop(0)
 
         else:
             new_dfa_nfa_ids.extend(as_list.pop())
@@ -1079,14 +1295,16 @@ fn split_tokens(
             print("new_dfa_nfa_ids should not be empty")
             sys.exit(1)
 
-        ref new_dfa = automaton.nfa_to_dfa(new_dfa_nfa_ids, automaton.nfa_end_id, dfa.list_index)
-        automaton.construct_powerset_for_dfa(new_dfa, automaton.nfa_end_id)
+        var new_dfa = automaton.nfa_to_dfa(
+            new_dfa_nfa_ids, automaton.nfa_end_id, dfa.list_index
+        )
+        automaton.construct_powerset_for_dfa(new_dfa[], automaton.nfa_end_id)
 
         for generated_dfa_id in reversed(generated_dfa_ids):
-            ref higher_prio_dfa = automaton.dfa_states[generated_dfa_id.0]
+            ref higher_prio_dfa = automaton.dfa_states[generated_dfa_id.inner]
             var any_eq = False
-            for tt in higher_prio_dfa.transitions:
-                for t in new_dfa.transitions:
+            for tt in higher_prio_dfa[].transitions:
+                for t in new_dfa[].transitions:
                     if t.type_ == tt.type_:
                         any_eq = True
                         break
@@ -1095,21 +1313,28 @@ fn split_tokens(
                     break
 
             if any_eq:
-                panic_if_unreachable_transition(dfa, higher_prio_dfa)
+                panic_if_unreachable_transition(dfa, higher_prio_dfa[])
 
-        generated_dfa_ids.append(new_dfa.list_index)       
+        generated_dfa_ids.append(new_dfa[].list_index)
 
     return (generated_dfa_ids^, end_dfa)
 
 
 fn panic_if_unreachable_transition(original_dfa: DFAState, split_dfa: DFAState):
     @parameter
-    fn check(mut already_checked: List[DFAStateId], original_dfa: DFAState, split_dfa: DFAState):
+    fn check(
+        mut already_checked: List[DFAStateId],
+        original_dfa: DFAState,
+        split_dfa: DFAState,
+    ):
         already_checked.append(split_dfa.list_index)
         var t1 = [t.type_ for t in original_dfa.transitions]
         var t2 = [t.type_ for t in split_dfa.transitions]
         if t1 != t2 and split_dfa.is_final:
-            print("Find and unreachable alternative in the rule", original_dfa.from_rule)
+            print(
+                "Find and unreachable alternative in the rule",
+                original_dfa.from_rule,
+            )
             sys.exit(1)
 
         for t in split_dfa.transitions:
