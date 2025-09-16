@@ -1,7 +1,5 @@
 from hashlib import Hasher
 from collections import Set
-from memory import OwnedPointer
-from memory import ArcPointer
 import sys
 
 from parsa.automaton.transition_type import TransitionType
@@ -24,7 +22,6 @@ alias string = __mlir_type[`!kgen.string`]
 
 # TODO THINGS:
 # 1. move out all these Materialize things.
-# 2. Fix pointers issue with Pointers, UnsafePointers, ArcPointers, etc.
 # 3. Use abort instead of these sys.exit(1) things, because those will not expose the place where the issue happened.
 
 
@@ -360,12 +357,12 @@ struct Keywords(Copyable, Movable):
 struct RuleAutomaton(Copyable, Movable):
     var type_: InternalNonterminalType
     var nfa_states: List[NFAState]
-    var dfa_states: List[ArcPointer[DFAState]]  # sould be a Box?
+    var dfa_states: List[DFAState]  # sould be a Box?
     var name: StaticString
     var node_may_be_ommited: Bool
     var nfa_end_id: NFAStateId
     var no_transition_dfa_id: Optional[DFAStateId]
-    var fallback_plans: List[ArcPointer[Plan]]  # Should be a Box?
+    var fallback_plans: List[Plan]  # Should be a Box?
     var does_error_recovery: Bool
 
     fn __init__(out self):
@@ -549,11 +546,11 @@ struct RuleAutomaton(Copyable, Movable):
         starts: List[NFAStateId],
         end: NFAStateId,
         from_alternative_list_index: Optional[DFAStateId],
-    ) -> ArcPointer[DFAState]:
+    ) -> ref [self.dfa_states] DFAState:
         """TODO: Check if this correctly handles the origins."""
         var grouped_nfas = self.group_nfas(starts)
         for ref dfa_state in self.dfa_states:
-            if dfa_state[].nfa_set == grouped_nfas:
+            if dfa_state.nfa_set == grouped_nfas:
                 return dfa_state
 
         var some_is_end = [
@@ -573,15 +570,17 @@ struct RuleAutomaton(Copyable, Movable):
             transitions={},
         )
 
-        self.dfa_states.append(ArcPointer(dfa_state^))
+        self.dfa_states.append(dfa_state^)
         return self.dfa_states[-1]
 
     fn construct_powerset(mut self, start: NFAStateId, end: NFAStateId):
-        var dfa = self.nfa_to_dfa([start], end, None)
-        self.construct_powerset_for_dfa(dfa[], end)
+        ref dfa = self.nfa_to_dfa([start], end, None)
+        self.construct_powerset_for_dfa(UnsafePointer(to=dfa), end)
 
-    fn construct_powerset_for_dfa(mut self, mut dfa: DFAState, end: NFAStateId):
-        ref state = dfa
+    fn construct_powerset_for_dfa(
+        mut self, dfa: UnsafePointer[DFAState], end: NFAStateId
+    ):
+        ref state = dfa[]
         if state.is_calculated:
             return
 
@@ -607,14 +606,16 @@ struct RuleAutomaton(Copyable, Movable):
                         state_ids = [transition.to]
 
         var transitions = [
-            DFATransition(it.key.copy(), self.nfa_to_dfa(it.value, end, None)[])
+            DFATransition(it.key.copy(), self.nfa_to_dfa(it.value, end, None))
             for it in grouped_transitions.items()
         ]
 
         state.transitions = transitions.copy()
         state.is_calculated = True
         for ref transition in transitions:
-            self.construct_powerset_for_dfa(transition.to[], end)
+            self.construct_powerset_for_dfa(
+                UnsafePointer(to=transition.to[]), end
+            )
 
         state.is_final |= any(
             [
@@ -663,7 +664,7 @@ struct RuleAutomaton(Copyable, Movable):
                 transition_to_plan=FastLookupTransitions.new_empty(),
                 transitions={},
             )
-            self.dfa_states.append(ArcPointer(dfa_state^))
+            self.dfa_states.append(dfa_state^)
             self.no_transition_dfa_id = list_index
 
     # TODO: MISSING
@@ -706,9 +707,9 @@ fn generate_automatons(
     var terminal_count = keywords.counter
 
     var first_plans = Dict[InternalNonterminalType, FirstPlan]()
-    var rule_labels = automatons.keys()
 
-    for rule_label in rule_labels:
+    for ref it in automatons.items():
+        ref rule_label = it.key
         create_first_plans(
             nonterminal_map,
             keywords,
@@ -718,8 +719,8 @@ fn generate_automatons(
             rule_label,
         )
 
-        ref automaton = automatons.get(rule_label).value()
-        if automaton.dfa_states[0][].is_final:
+        ref automaton = it.value
+        if automaton.dfa_states[0].is_final:
             print(
                 "The rule ",
                 automaton.name,
@@ -732,15 +733,17 @@ fn generate_automatons(
             ref plans, _ = rl.get()
             automaton.dfa_states[
                 0
-            ][].transition_to_plan = FastLookupTransitions.from_plans(
+            ].transition_to_plan = FastLookupTransitions.from_plans(
                 terminal_count, plans.copy()
             )
         else:
             print("Unreachable code while generating automatons.")
             sys.exit(1)
 
-    for rule_label in rule_labels:
-        for i in range(1, len(automatons.get(rule_label).value().dfa_states)):
+    for ref it in automatons.items():
+        ref rule_label = it.key
+        ref automaton = it.value
+        for i in range(1, len(automaton.dfa_states)):
             ref plans, _ = plans_for_dfa(
                 nonterminal_map,
                 keywords,
@@ -751,22 +754,23 @@ fn generate_automatons(
                 DFAStateId(i),
                 False,
             )
-            automatons.get(rule_label).value().dfa_states[
+            automaton.dfa_states[
                 i
-            ][].transition_to_plan = FastLookupTransitions.from_plans(
+            ].transition_to_plan = FastLookupTransitions.from_plans(
                 terminal_count, plans
             )
-        for i in range(1, len(automatons.get(rule_label).value().dfa_states)):
+
+        for i in range(1, len(automaton.dfa_states)):
             var left_recursion_plans = create_left_recursion_plans(
                 automatons, rule_label, DFAStateId(i), first_plans
             )
-            var dfa = automatons.get(rule_label).value().dfa_states[i]
-            if len(dfa[].transition_to_plan.inner) == 0:
-                dfa[].transition_to_plan = FastLookupTransitions.from_plans(
+            ref dfa = automaton.dfa_states[i]
+            if len(dfa.transition_to_plan.inner) == 0:
+                dfa.transition_to_plan = FastLookupTransitions.from_plans(
                     terminal_count, left_recursion_plans
                 )
             else:
-                dfa[].transition_to_plan.extend(left_recursion_plans)
+                dfa.transition_to_plan.extend(left_recursion_plans)
 
     return (automatons^, keywords^)
 
@@ -825,7 +829,7 @@ fn plans_for_dfa(
         dfa_id.inner
     ]
 
-    for transition in dfa_state[].transitions:
+    for transition in dfa_state.transitions:
         ref ttype = transition.type_
         if ttype is TransitionType.Terminal:
             ref type_, debug_text = ttype.get[
@@ -996,7 +1000,7 @@ fn plans_for_dfa(
                         debug_text="Negative lookahead abort",
                         mode=PlanMode.LL,
                         _next_dfa=Pointer[origin=MutableAnyOrigin](
-                            to=automaton.dfa_states[empty_dfa_id.inner][]
+                            to=automaton.dfa_states[empty_dfa_id.inner]
                         ),
                         pushes=[],
                         type_=t,
@@ -1021,7 +1025,7 @@ fn plans_for_dfa(
     if len(conflict_tokens) > 0:
         ref automaton = automatons.setdefault(automaton_key, {})
         ref generated_dfa_ids, end = split_tokens(
-            automaton, dfa_state[].copy(), conflict_transitions
+            automaton, dfa_state.copy(), conflict_transitions
         )
         var t = automaton.type_
 
@@ -1048,16 +1052,14 @@ fn plans_for_dfa(
                     try:
                         var fallback_plan = result.pop(transition)
                         ref automaton = automatons.setdefault(automaton_key, {})
-                        automaton.fallback_plans.append(
-                            ArcPointer(fallback_plan^)
-                        )
+                        automaton.fallback_plans.append(fallback_plan^)
                         new_plan = nest_plan(
                             new_plan,
                             t,
                             Pointer[origin=MutableAnyOrigin](to=end[]),
                             StackMode.Alternative(
                                 plan=UnsafePointer(
-                                    to=automaton.fallback_plans[-1][]
+                                    to=automaton.fallback_plans[-1]
                                 )
                             ),
                         )
@@ -1104,12 +1106,12 @@ fn create_left_recursion_plans(
     ref automaton = automatons.get(automaton_key, {})
     ref dfa_state = automaton.dfa_states[dfa_id.inner]
 
-    if dfa_state[].is_final and not dfa_state[].is_lookahead_end():
+    if dfa_state.is_final and not dfa_state.is_lookahead_end():
         ref first_plan = first_plans.get(automaton.type_).value()
         if first_plan is materialize[FirstPlan.Calculated]():
             ref is_left_recursive = first_plan.get()[1]
             if is_left_recursive:
-                for transition in automaton.dfa_states[0][].transitions:
+                for transition in automaton.dfa_states[0].transitions:
                     if (
                         transition.type_ is TransitionType.Nonterminal
                         and transition.type_.get[InternalNonterminalType]()
@@ -1125,7 +1127,7 @@ fn create_left_recursion_plans(
                             if t in plans:
                                 print(
                                     "Ambiguous:",
-                                    dfa_state[].from_rule,
+                                    dfa_state.from_rule,
                                     (
                                         "contains left recursion with"
                                         " alternatives!"
@@ -1232,7 +1234,7 @@ fn split_tokens(
     mut automaton: RuleAutomaton,
     dfa: DFAState,
     conflict_transitions: Set[TransitionType],
-) -> (List[DFAStateId], ArcPointer[DFAState]):
+) -> (List[DFAStateId], Pointer[DFAState, __origin_of(automaton.dfa_states)]):
     var transition_to_nfas = Dict[TransitionType, List[NFAStateId]]()
     var nfas = [v for v in dfa.nfa_set]
 
@@ -1255,7 +1257,7 @@ fn split_tokens(
                     transition_to_nfas[t] = [nfa_id]
 
     var generated_dfa_ids = List[DFAStateId]()
-    var end_dfa = automaton.nfa_to_dfa(
+    ref end_dfa = automaton.nfa_to_dfa(
         [automaton.nfa_end_id], automaton.nfa_end_id, None
     )
 
@@ -1295,16 +1297,18 @@ fn split_tokens(
             print("new_dfa_nfa_ids should not be empty")
             sys.exit(1)
 
-        var new_dfa = automaton.nfa_to_dfa(
+        ref new_dfa = automaton.nfa_to_dfa(
             new_dfa_nfa_ids, automaton.nfa_end_id, dfa.list_index
         )
-        automaton.construct_powerset_for_dfa(new_dfa[], automaton.nfa_end_id)
+        automaton.construct_powerset_for_dfa(
+            UnsafePointer(to=new_dfa), automaton.nfa_end_id
+        )
 
         for generated_dfa_id in reversed(generated_dfa_ids):
             ref higher_prio_dfa = automaton.dfa_states[generated_dfa_id.inner]
             var any_eq = False
-            for tt in higher_prio_dfa[].transitions:
-                for t in new_dfa[].transitions:
+            for tt in higher_prio_dfa.transitions:
+                for t in new_dfa.transitions:
                     if t.type_ == tt.type_:
                         any_eq = True
                         break
@@ -1313,11 +1317,11 @@ fn split_tokens(
                     break
 
             if any_eq:
-                panic_if_unreachable_transition(dfa, higher_prio_dfa[])
+                panic_if_unreachable_transition(dfa, higher_prio_dfa)
 
-        generated_dfa_ids.append(new_dfa[].list_index)
+        generated_dfa_ids.append(new_dfa.list_index)
 
-    return (generated_dfa_ids^, end_dfa)
+    return (generated_dfa_ids^, Pointer(to=end_dfa))
 
 
 fn panic_if_unreachable_transition(original_dfa: DFAState, split_dfa: DFAState):
