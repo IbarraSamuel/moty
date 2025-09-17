@@ -1,4 +1,4 @@
-from parsa.automaton import SquashedTransitions
+from parsa.new_automaton import SquashedTransitions
 import sys
 
 

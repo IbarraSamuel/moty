@@ -2,10 +2,10 @@ from hashlib import Hasher
 from collections import Set
 import sys
 
-from parsa.automaton.transition_type import TransitionType
-from parsa.automaton.rule import Rule
-from parsa.automaton.plan_mode import PlanMode
-from parsa.automaton.first_plan import FirstPlan
+from parsa.new_automaton.transition_type import TransitionType
+from parsa.new_automaton.rule import Rule
+from parsa.new_automaton.plan_mode import PlanMode
+from parsa.new_automaton.first_plan import FirstPlan
 
 alias NODE_START: UInt16 = 1 << 15
 alias ERROR_RECOVERY_BIT: UInt16 = 1 << 14
@@ -206,10 +206,12 @@ struct DFATransition[dfa_origin: ImmutableOrigin](Copyable, Movable):
     var to: Pointer[DFAState[dfa_origin], MutableAnyOrigin]
 
     fn __init__(
-        out self, var type_: TransitionType, mut to: DFAState[dfa_origin]
+        out self,
+        var type_: TransitionType,
+        ref [MutableAnyOrigin]to: DFAState[dfa_origin],
     ):
         self.type_ = type_^
-        self.to = Pointer[DFAState[dfa_origin], MutableAnyOrigin](to=to)
+        self.to = Pointer(to=to)
 
     fn next_dfa(self) -> ref [self.to.origin] DFAState[dfa_origin]:
         return self.to[]
@@ -225,14 +227,14 @@ struct StackMode[dfa_origin: ImmutableOrigin = ImmutableAnyOrigin](
     var _v: Int
     var inner: UnsafePointer[Plan[dfa_origin], mut=False]
 
-    fn __merge_with__[
-        other: __type_of(StackMode[_])
-    ](self, out result: StackMode[__origin_of(dfa_origin, other.dfa_origin)]):
-        var plan = self.inner[].__merge_with__[other = Plan[other.dfa_origin]]()
-        result = {
-            v = self._v,
-            plan = UnsafePointer(to=plan) if self.inner != {} else {},
-        }
+    # fn __merge_with__[
+    #     other: __type_of(StackMode[_])
+    # ](self, out result: StackMode[__origin_of(dfa_origin, other.dfa_origin)]):
+    #     var plan = self.inner[].__merge_with__[other = Plan[other.dfa_origin]]()
+    #     result = {
+    #         v = self._v,
+    #         plan = UnsafePointer(to=plan) if self.inner != {} else {},
+    #     }
 
     fn __init__(
         out self,
@@ -295,16 +297,17 @@ struct Push[dfa_origin: ImmutableOrigin](
     var _next_dfa: Pointer[DFAState[dfa_origin], origin=dfa_origin]
     var stack_mode: StackMode[dfa_origin]
 
-    fn __merge_with__[
-        other: __type_of(Push[_])
-    ](self, out result: Push[__origin_of(dfa_origin, other.dfa_origin)]):
-        result = {
-            node_type = self.node_type,
-            next_dfa = self._next_dfa[],
-            stack_mode = self.stack_mode.__merge_with__[
-                other = StackMode[result.dfa_origin]
-            ](),
-        }
+    # fn __merge_with__[
+    #     other: __type_of(Push[_])
+    # ](self, out result: Push[__origin_of(dfa_origin, other.dfa_origin)]):
+    #     # next_dfa = self._next_dfa[].__merge_with__[other=DFAState[other.dfa_origin]]()
+    #     result = {
+    #         node_type = self.node_type,
+    #         next_dfa = self._next_dfa,
+    #         stack_mode = self.stack_mode.__merge_with__[
+    #             other = StackMode[result.dfa_origin]
+    #         ](),
+    #     }
 
     fn __init__(
         out self,
@@ -345,34 +348,35 @@ struct Push[dfa_origin: ImmutableOrigin](
         return self._next_dfa[]
 
 
-struct Plan[dfa_origin: ImmutableOrigin](
-    Copyable, EqualityComparable, Movable, Writable
-):
+struct Plan[
+    dfa_origin: ImmutableOrigin,
+    next_origin: ImmutableOrigin = ImmutableAnyOrigin,
+](Copyable, EqualityComparable, Movable, Writable):
     var pushes: List[Push[dfa_origin]]
-    var _next_dfa: Pointer[DFAState[dfa_origin], dfa_origin]
+    var _next_dfa: Pointer[DFAState[dfa_origin], next_origin]
     var type_: InternalSquashedType
     var mode: PlanMode
     var debug_text: StaticString
 
-    fn __merge_with__[
-        other: __type_of(Plan[_])
-    ](self, out result: Plan[__origin_of(dfa_origin, other.dfa_origin)]):
-        pushes: List[Push[result.dfa_origin]] = [
-            v.__merge_with__[other = Push[result.dfa_origin]]()
-            for v in self.pushes
-        ]
-        result = {
-            pushes = pushes^,
-            next_dfa = self._next_dfa[],
-            type_ = self.type_,
-            mode = self.mode,
-            debug_text = self.debug_text,
-        }
+    # fn __merge_with__[
+    #     other: __type_of(Plan[_])
+    # ](self, out result: Plan[__origin_of(dfa_origin, other.dfa_origin)]):
+    #     pushes: List[Push[result.dfa_origin]] = [
+    #         v.__merge_with__[other = Push[result.dfa_origin]]()
+    #         for v in self.pushes
+    #     ]
+    #     result = {
+    #         pushes = pushes^,
+    #         next_dfa = self._next_dfa[],
+    #         type_ = self.type_,
+    #         mode = self.mode,
+    #         debug_text = self.debug_text,
+    #     }
 
     fn __init__(
         out self,
         var pushes: List[Push[dfa_origin]],
-        ref [dfa_origin]next_dfa: DFAState[dfa_origin],
+        ref [next_origin]next_dfa: DFAState[dfa_origin],
         type_: InternalSquashedType,
         mode: PlanMode,
         debug_text: StaticString,
@@ -408,7 +412,7 @@ struct Plan[dfa_origin: ImmutableOrigin](
             ")",
         )
 
-    fn next_dfa(self) -> ref [dfa_origin] DFAState[dfa_origin]:
+    fn next_dfa(self) -> ref [next_origin] DFAState[dfa_origin]:
         return self._next_dfa[]
 
 
@@ -656,12 +660,18 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
     fn construct_powerset(mut self, start: NFAStateId, end: NFAStateId):
         ref dfa = self.nfa_to_dfa([start], end, None)
-        self.construct_powerset_for_dfa(UnsafePointer(to=dfa), end)
+        self.construct_powerset_for_dfa(
+            # using pointer to erase self mutable reference twice
+            UnsafePointer[origin=MutableAnyOrigin](to=dfa)[],
+            end,
+        )
 
     fn construct_powerset_for_dfa(
-        mut self, dfa: UnsafePointer[DFAState[dfa_origin]], end: NFAStateId
+        mut self,
+        mut state: DFAState[dfa_origin],
+        end: NFAStateId,
     ):
-        ref state = dfa[]
+        # ref state = dfa[]
         if state.is_calculated:
             return
 
@@ -694,9 +704,7 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
         state.transitions = transitions.copy()
         state.is_calculated = True
         for ref transition in transitions:
-            self.construct_powerset_for_dfa(
-                UnsafePointer(to=transition.to[]), end
-            )
+            self.construct_powerset_for_dfa(transition.to[], end)
 
         state.is_final |= any(
             [
@@ -936,7 +944,7 @@ fn plans_for_dfa[
                     mode=PlanMode.LL,
                 )
 
-            add_if_no_conflict[new_plan](
+            add_if_no_conflict[dfa_origin, new_plan](
                 plans,
                 conflict_transitions,
                 conflict_tokens,
@@ -949,7 +957,7 @@ fn plans_for_dfa[
                 ref kws = soft_keywords[type_]
                 for kw in kws:
                     var soft_keyword_type = keywords.squashed(kw).value()
-                    add_if_no_conflict[new_plan](
+                    add_if_no_conflict[dfa_origin, new_plan](
                         plans,
                         conflict_transitions,
                         conflict_tokens,
@@ -1011,10 +1019,10 @@ fn plans_for_dfa[
                                 it.value,  # this is nested_plan, but I removed to get rid of a warning
                                 node_id,
                                 transition.to,
-                                StackMode.LL,
+                                StackMode[dfa_origin].LL,
                             )
 
-                        add_if_no_conflict[create_plan](
+                        add_if_no_conflict[dfa_origin, create_plan](
                             plans,
                             conflict_transitions,
                             conflict_tokens,
@@ -1023,7 +1031,7 @@ fn plans_for_dfa[
                             # create_plan,
                         )
 
-                elif fp is materialize[FirstPlan.Calculating]():
+                elif fp is materialize[FirstPlan[dfa_origin].Calculating]():
                     print("this should be unreachable")
                     sys.exit(1)
             except:
@@ -1034,8 +1042,8 @@ fn plans_for_dfa[
             var t = keywords.squashed(keyword).value()
 
             @parameter
-            fn create_other_plan() -> Plan:
-                return Plan(
+            fn create_other_plan() -> Plan[dfa_origin]:
+                return Plan[dfa_origin](
                     pushes=[],
                     next_dfa=transition.to[],
                     type_=t,
@@ -1043,7 +1051,7 @@ fn plans_for_dfa[
                     mode=PlanMode.LL,
                 )
 
-            add_if_no_conflict[create_other_plan](
+            add_if_no_conflict[dfa_origin, create_other_plan](
                 plans,
                 conflict_transitions,
                 conflict_tokens,
@@ -1057,9 +1065,10 @@ fn plans_for_dfa[
                 keywords, transition
             )
             for t in peek_terminals:
+                ref ndfa = next_dfa[]
                 plans[t] = (
                     transition.copy(),
-                    Plan(
+                    Plan[dfa_origin](
                         debug_text="positive lookahead",
                         mode=PlanMode.PositivePeek,
                         next_dfa=next_dfa[],
@@ -1086,7 +1095,7 @@ fn plans_for_dfa[
                     ref automaton = automatons[automaton_key]
                     ref empty_dfa_id = automaton.no_transition_dfa_id.value()
                     ref dfa_state = automaton.dfa_states[empty_dfa_id.inner]
-                    next_plans[t] = Plan(
+                    next_plans[t] = Plan[dfa_origin](
                         debug_text="Negative lookahead abort",
                         mode=PlanMode.LL,
                         next_dfa=dfa_state,
@@ -1145,9 +1154,11 @@ fn plans_for_dfa[
                             new_plan,
                             t,
                             Pointer[origin=MutableAnyOrigin](to=end[]),
-                            StackMode.Alternative(
+                            StackMode[dfa_origin].Alternative(
                                 plan=UnsafePointer(
-                                    to=automaton.fallback_plans[-1]
+                                    to=automaton.fallback_plans.unsafe_get(
+                                        len(automaton.fallback_plans) - 1
+                                    )
                                 )
                             ),
                         )
@@ -1162,10 +1173,12 @@ fn add_if_no_conflict[
     dfa_origin: ImmutableOrigin,
     create_plan: fn () capturing -> Plan[dfa_origin],
 ](
-    mut plans: Dict[InternalSquashedType, (DFATransition, Plan[dfa_origin])],
+    mut plans: Dict[
+        InternalSquashedType, (DFATransition[dfa_origin], Plan[dfa_origin])
+    ],
     mut conflict_transitions: Set[TransitionType],
     mut conflict_tokens: Set[InternalSquashedType],
-    var transition: DFATransition,
+    var transition: DFATransition[dfa_origin],
     token: InternalSquashedType,
     # create_plan: fn () capturing -> Plan,
 ):
@@ -1188,10 +1201,10 @@ fn add_if_no_conflict[
 fn create_left_recursion_plans[
     dfa_origin: ImmutableOrigin
 ](
-    automatons: Automatons,
+    automatons: Automatons[dfa_origin],
     automaton_key: InternalNonterminalType,
     dfa_id: DFAStateId,
-    first_plans: FirstPlans,
+    first_plans: FirstPlans[dfa_origin],
 ) -> SquashedTransitions[dfa_origin]:
     var plans = Dict[InternalSquashedType, Plan[dfa_origin]]()
     ref automaton = automatons.get(automaton_key, {})
@@ -1199,7 +1212,7 @@ fn create_left_recursion_plans[
 
     if dfa_state.is_final and not dfa_state.is_lookahead_end():
         ref first_plan = first_plans.get(automaton.type_).value()
-        if first_plan is materialize[FirstPlan.Calculated]():
+        if first_plan is materialize[FirstPlan[dfa_origin].Calculated]():
             ref is_left_recursive = first_plan.get()[1]
             if is_left_recursive:
                 for transition in automaton.dfa_states[0].transitions:
@@ -1237,19 +1250,20 @@ fn create_left_recursion_plans[
 
 
 fn nest_plan[
-    dfa_origin: ImmutableOrigin
+    dfa_origin: ImmutableOrigin,
+    next_origin: ImmutableOrigin,
 ](
     plan: Plan[dfa_origin],
     new_node_id: InternalNonterminalType,
-    next_dfa: Pointer[DFAState, dfa_origin],
-    mode: StackMode,
-) -> Plan[dfa_origin]:
+    next_dfa: Pointer[DFAState[dfa_origin], next_origin],
+    mode: StackMode[dfa_origin],
+) -> Plan[dfa_origin, next_origin]:
     var pushes = plan.pushes.copy()
     pushes.insert(
         0,
-        Push(
+        Push[dfa_origin](
             node_type=new_node_id,
-            _next_dfa=Pointer(to=plan.next_dfa()),
+            next_dfa=plan.next_dfa(),
             stack_mode=mode,
         ),
     )
@@ -1262,9 +1276,12 @@ fn nest_plan[
     )
 
 
-fn calculate_peek_dfa(
-    keywords: Keywords, transition: DFATransition
-) -> (Pointer[DFAState, MutableAnyOrigin], List[InternalSquashedType],):
+fn calculate_peek_dfa[
+    dfa_origin: ImmutableOrigin
+](keywords: Keywords, transition: DFATransition[dfa_origin]) -> (
+    Pointer[DFAState[dfa_origin], MutableAnyOrigin],
+    List[InternalSquashedType],
+):
     ref dfa = transition.next_dfa()
     ref lookahead_end = dfa.transitions[0].next_dfa()
 
@@ -1289,17 +1306,18 @@ fn calculate_peek_dfa(
 
 
 fn search_lookahead_end[
-    o: Origin
-](ref [o]dfa_state: DFAState) -> ref [o] DFAState:
+    o: Origin, dfa_origin: ImmutableOrigin
+](ref [o]dfa_state: DFAState[dfa_origin]) -> ref [o] DFAState[dfa_origin]:
     var already_checked = Set[DFAStateId]()
     already_checked.add(dfa_state.list_index)
 
     @parameter
     fn search[
-        o: Origin
-    ](mut already_checked: Set[DFAStateId], ref [o]dfa_state: DFAState) -> ref [
-        o
-    ] DFAState:
+        o: Origin, dfa_origin: ImmutableOrigin
+    ](
+        mut already_checked: Set[DFAStateId],
+        ref [o]dfa_state: DFAState[dfa_origin],
+    ) -> ref [o] DFAState[dfa_origin]:
         for transition in dfa_state.transitions:
             if transition.type_ is TransitionType.LookaheadEnd:
                 return transition.next_dfa()
@@ -1323,11 +1341,16 @@ fn search_lookahead_end[
     return search(already_checked, dfa_state)
 
 
-fn split_tokens(
-    mut automaton: RuleAutomaton,
-    dfa: DFAState,
+fn split_tokens[
+    dfa_origin: ImmutableOrigin
+](
+    mut automaton: RuleAutomaton[dfa_origin],
+    dfa: DFAState[dfa_origin],
     conflict_transitions: Set[TransitionType],
-) -> (List[DFAStateId], Pointer[DFAState, __origin_of(automaton.dfa_states)]):
+) -> (
+    List[DFAStateId],
+    Pointer[DFAState[dfa_origin], __origin_of(automaton.dfa_states)],
+):
     var transition_to_nfas = Dict[TransitionType, List[NFAStateId]]()
     var nfas = [v for v in dfa.nfa_set]
 
@@ -1394,7 +1417,8 @@ fn split_tokens(
             new_dfa_nfa_ids, automaton.nfa_end_id, dfa.list_index
         )
         automaton.construct_powerset_for_dfa(
-            UnsafePointer(to=new_dfa), automaton.nfa_end_id
+            UnsafePointer[origin=MutableAnyOrigin](to=new_dfa)[],
+            automaton.nfa_end_id,
         )
 
         for generated_dfa_id in reversed(generated_dfa_ids):
