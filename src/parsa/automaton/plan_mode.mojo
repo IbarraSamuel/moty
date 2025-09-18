@@ -1,7 +1,6 @@
 @register_passable("trivial")
 struct PlanMode(Writable):
     alias Invalid = -1
-
     alias LeftRecursive = 0
     alias LL = 1
     alias PositivePeek = 2
