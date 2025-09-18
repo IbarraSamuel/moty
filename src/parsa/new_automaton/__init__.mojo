@@ -217,7 +217,7 @@ struct DFATransition[dfa_origin: ImmutableOrigin](Copyable, Movable):
         return self.to[]
 
 
-struct StackMode[dfa_origin: ImmutableOrigin = ImmutableAnyOrigin](
+struct StackMode[dfa_origin: ImmutableOrigin](
     EqualityComparable, Identifiable, ImplicitlyCopyable, Movable, Writable
 ):
     alias Invalid = Self()
@@ -1482,9 +1482,7 @@ fn nonterminal_to_str(
 
 
 # TODO: Should implement iterator but I will iterate the inner list and ignore None values. That's all.
-struct FastLookupTransitions[dfa_origin: ImmutableOrigin = ImmutableAnyOrigin](
-    Copyable, Movable
-):
+struct FastLookupTransitions[dfa_origin: ImmutableOrigin](Copyable, Movable):
     var inner: List[Optional[Plan[dfa_origin]]]
 
     fn __init__(out self):
