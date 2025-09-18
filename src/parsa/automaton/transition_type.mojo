@@ -1,5 +1,5 @@
-# TODO: Refactor to use it on a list
-import sys
+from os import abort
+from sys.intrinsics import _type_is_eq
 
 
 struct TransitionType(
@@ -63,8 +63,7 @@ struct TransitionType(
             or (self is materialize[Self.NegativeLookaheadStart]())
             or (self is materialize[Self.LookaheadEnd]())
         ):
-            print("Invalid transition type initialization.")
-            sys.exit(1)
+            abort("Invalid transition type initialization.")
 
         new_self = Self(self._v)
         new_self.inner = (terminal, nonterminal, string)
@@ -74,23 +73,20 @@ struct TransitionType(
     fn get[t: Copyable](self) -> t:
         if (
             self is materialize[Self.Terminal]()
-            and sys.intrinsics._type_is_eq[
-                t, (InternalTerminalType, StaticString)
-            ]()
+            and _type_is_eq[t, (InternalTerminalType, StaticString)]()
         ):
             return rebind[t]((self.inner[0], self.inner[2])).copy()
         elif (
             self is materialize[Self.Nonterminal]()
-            and sys.intrinsics._type_is_eq[t, InternalNonterminalType]()
+            and _type_is_eq[t, InternalNonterminalType]()
         ):
             return rebind[t](self.inner[1]).copy()
         elif (
             self is materialize[Self.Keyword]()
-            and sys.intrinsics._type_is_eq[t, StaticString]()
+            and _type_is_eq[t, StaticString]()
         ):
             return rebind[t](self.inner[2]).copy()
 
-        print("Transition Type doesn't have values to get.")
-        sys.exit(1)
+        abort("Transition Type doesn't have values to get.")
         # NOTE: This never runs
         return rebind[t](self.inner).copy()

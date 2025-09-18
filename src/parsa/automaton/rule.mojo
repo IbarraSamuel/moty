@@ -1,5 +1,6 @@
 # from collections import Set
-import sys
+from sys.intrinsics import _type_is_eq
+from os import abort
 
 
 struct Rule(Identifiable, ImplicitlyCopyable, Movable, Writable):
@@ -54,22 +55,21 @@ struct Rule(Identifiable, ImplicitlyCopyable, Movable, Writable):
             or (self is Self.NodeMayBeOmmited and r1 != {})
             or (self is Self.DoesErrorRecovery and r1 != {})
         ):
-            print("Error on Rule creation.")
-            sys.exit(1)
+            abort("Error on Rule creation.")
 
         new_self = Self(self._v)
         new_self._content = (r1, r2, s)
         return new_self^
 
     fn get[t: Copyable](self) -> t:
-        if (
-            self is Self.Identifier or self is Self.Keyword
-        ) and sys.intrinsics._type_is_eq[t, StaticString]():
+        if (self is Self.Identifier or self is Self.Keyword) and _type_is_eq[
+            t, StaticString
+        ]():
             return rebind[t](self._content[2]).copy()
 
         if (
             self is Self.Or or self is Self.Cut or self is Self.Next
-        ) and sys.intrinsics._type_is_eq[t, Tuple[Rule, Rule]]():
+        ) and _type_is_eq[t, Tuple[Rule, Rule]]():
             return rebind[t]((self._content[0], self._content[1])).copy()
 
         if (
@@ -79,11 +79,10 @@ struct Rule(Identifiable, ImplicitlyCopyable, Movable, Writable):
             or self is Self.PositiveLookahead
             or self is Self.NodeMayBeOmmited
             or self is Self.DoesErrorRecovery
-        ) and sys.intrinsics._type_is_eq[t, Rule]():
+        ) and _type_is_eq[t, Rule]():
             return rebind[t](self._content[0]).copy()
 
-        print("Failed to get value, due to type specified in the getter.")
-        sys.exit(1)
+        abort("Failed to get value, due to type specified in the getter.")
 
         # NOTE: This never runs
         return rebind[t](self._content).copy()

@@ -1,6 +1,7 @@
 from hashlib import Hasher
 from collections import Set
-import sys
+from sys.intrinsics import _type_is_eq
+from os import abort
 
 from parsa.automaton.transition_type import TransitionType
 from parsa.automaton.rule import Rule
@@ -8,23 +9,6 @@ from parsa.automaton.plan_mode import PlanMode
 
 alias NODE_START: UInt16 = 1 << 15
 alias ERROR_RECOVERY_BIT: UInt16 = 1 << 14
-
-alias SquashedTransitions[dfa_origins: ImmutableOrigin] = Dict[
-    InternalSquashedType, Plan[dfa_origins]
-]
-
-alias Automatons[dfa_origin: ImmutableOrigin] = Dict[
-    InternalNonterminalType, RuleAutomaton[dfa_origin]
-]
-alias InternalStrToToken = Dict[StaticString, InternalTerminalType]
-alias InternalStrToNode = Dict[StaticString, InternalNonterminalType]
-alias RuleMap = Dict[InternalNonterminalType, (StaticString, Rule)]
-alias SoftKeywords = Dict[InternalTerminalType, Set[StaticString]]
-alias FirstPlans[dfa_origin: ImmutableOrigin] = Dict[
-    InternalNonterminalType, FirstPlan[dfa_origin]
-]
-
-alias string = __mlir_type[`!kgen.string`]
 
 # TODO THINGS:
 # 1. move out all these Materialize things.
@@ -165,7 +149,7 @@ struct FirstPlan[dfa_origin: ImmutableOrigin](Copyable, Identifiable, Movable):
     alias Calculating = Self(1)
 
     var _v: Int
-    var inner: Tuple[SquashedTransitions[dfa_origin], Bool]
+    var inner: Tuple[Dict[InternalSquashedType, Plan[dfa_origin]], Bool]
 
     fn __init__(out self, v: Int = -1):
         self._v = v
@@ -177,7 +161,7 @@ struct FirstPlan[dfa_origin: ImmutableOrigin](Copyable, Identifiable, Movable):
     fn __call__(
         self,
         *,
-        var plans: SquashedTransitions[dfa_origin] = {},
+        var plans: Dict[InternalSquashedType, Plan[dfa_origin]] = {},
         var is_left_recursive: Bool = {},
     ) -> Self:
         new_self = Self(self._v)
@@ -190,14 +174,14 @@ struct FirstPlan[dfa_origin: ImmutableOrigin](Copyable, Identifiable, Movable):
         elif self is materialize[Self.Calculating]():
             pass
         else:
-            print("Failed to create first plan.")
-            sys.exit(1)
+            abort("Failed to create first plan.")
         return new_self^
 
-    fn get(self) -> ref [self.inner] (SquashedTransitions[dfa_origin], Bool):
+    fn get(
+        self,
+    ) -> ref [self.inner] (Dict[InternalSquashedType, Plan[dfa_origin]], Bool):
         if not (self is materialize[Self.Calculated]()):
-            print("Invalid getter for FirstPlan.Calculated.")
-            sys.exit(1)
+            abort("Invalid getter for FirstPlan.Calculated.")
         return self.inner
 
 
@@ -305,16 +289,14 @@ struct StackMode[dfa_origin: ImmutableOrigin](
         elif self is materialize[Self.LL]():
             pass
         else:
-            print("Invalid StackMode")
-            sys.exit(1)
+            abort("Invalid StackMode")
         return new_self^
 
     fn get(self) -> ref [StaticConstantOrigin] Plan[dfa_origin]:
         if self is materialize[Self.Alternative]():
             return self.inner[]
 
-        print("Invalid getter for StackMode")
-        sys.exit(1)
+        abort("Invalid getter for StackMode")
         return self.inner[]
 
     fn write_to(self, mut w: Some[Writer]):
@@ -504,8 +486,8 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
     fn build(
         mut self,
-        nonterminal_map: InternalStrToNode,
-        terminal_map: InternalStrToToken,
+        nonterminal_map: Dict[StaticString, InternalNonterminalType],
+        terminal_map: Dict[StaticString, InternalTerminalType],
         mut keywords: Keywords,
         rule: Rule,
     ) -> (NFAStateId, NFAStateId):
@@ -537,15 +519,16 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
                     ),
                 )
             else:
-                print(
-                    "No terminal / nonterminal found for",
-                    string,
-                    "; token map =",
-                    terminal_map.__str__(),
-                    "; node map =",
-                    nonterminal_map.__str__(),
+                abort(
+                    String(
+                        "No terminal / nonterminal found for",
+                        string,
+                        "; token map =",
+                        terminal_map.__str__(),
+                        "; node map =",
+                        nonterminal_map.__str__(),
+                    )
                 )
-                sys.exit(1)
 
             return (start, end)
 
@@ -603,8 +586,7 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
         # TODO: Unimplemented
         elif rule is Rule.Cut:
-            print("TODO: UNIMPLEMENTED")
-            sys.exit(1)
+            abort("TODO: UNIMPLEMENTED")
 
         elif rule is Rule.Next:
             ref rule1, rule2 = rule.get[(Rule, Rule)]()
@@ -623,8 +605,7 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
             self.does_error_recovery = True
             return _build(self, _rule)
 
-        print("Invalid Rule:", rule)
-        sys.exit(1)
+        abort(String("Invalid Rule:", rule))
         return ({-1}, {-1})
 
     fn nfa_state_mut(
@@ -806,11 +787,11 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
 fn generate_automatons[
     dfa_origin: ImmutableOrigin
 ](
-    nonterminal_map: InternalStrToNode,
-    terminal_map: InternalStrToToken,
-    rules: RuleMap,
-    soft_keywords: SoftKeywords,
-) -> (Automatons[dfa_origin], Keywords):
+    nonterminal_map: Dict[StaticString, InternalNonterminalType],
+    terminal_map: Dict[StaticString, InternalTerminalType],
+    rules: Dict[InternalNonterminalType, (StaticString, Rule)],
+    soft_keywords: Dict[InternalTerminalType, Set[StaticString]],
+) -> (Dict[InternalNonterminalType, RuleAutomaton[dfa_origin]], Keywords):
     var keywords = Keywords(counter=len(terminal_map), keywords={})
     var automatons = Dict[InternalNonterminalType, RuleAutomaton[dfa_origin]]()
 
@@ -855,12 +836,13 @@ fn generate_automatons[
 
         ref automaton = it.value
         if automaton.dfa_states[0].is_final:
-            print(
-                "The rule ",
-                automaton.name,
-                " must not have an empty production",
+            abort(
+                String(
+                    "The rule ",
+                    automaton.name,
+                    " must not have an empty production",
+                )
             )
-            sys.exit(1)
 
         ref rl = first_plans.get(rule_label).value()
         if rl is materialize[FirstPlan[dfa_origin].Calculated]():
@@ -869,8 +851,7 @@ fn generate_automatons[
                 dfa_origin
             ].from_plans(terminal_count, plans.copy())
         else:
-            print("Unreachable code while generating automatons.")
-            sys.exit(1)
+            abort(String("Unreachable code while generating automatons."))
 
     for ref it in automatons.items():
         ref rule_label = it.key
@@ -908,11 +889,11 @@ fn generate_automatons[
 fn create_first_plans[
     dfa_origin: ImmutableOrigin
 ](
-    nonterminal_map: InternalStrToNode,
+    nonterminal_map: Dict[StaticString, InternalNonterminalType],
     keywords: Keywords,
-    soft_keywords: SoftKeywords,
-    mut first_plans: FirstPlans[dfa_origin],
-    mut automatons: Automatons[dfa_origin],
+    soft_keywords: Dict[InternalTerminalType, Set[StaticString]],
+    mut first_plans: Dict[InternalNonterminalType, FirstPlan[dfa_origin]],
+    mut automatons: Dict[InternalNonterminalType, RuleAutomaton[dfa_origin]],
     automaton_key: InternalNonterminalType,
 ):
     if not first_plans.get(automaton_key):
@@ -930,12 +911,14 @@ fn create_first_plans[
             True,
         )
         if is_left_recursive and len(plans) == 0:
-            print(
-                (
-                    "The grammar contains left recursion without an alternative"
-                    " for rule"
-                ),
-                nonterminal_to_str(nonterminal_map, automaton_key),
+            abort(
+                String(
+                    (
+                        "The grammar contains left recursion without an"
+                        " alternative for rule"
+                    ),
+                    nonterminal_to_str(nonterminal_map, automaton_key),
+                )
             )
 
         first_plans[automaton_key] = materialize[
@@ -946,15 +929,15 @@ fn create_first_plans[
 fn plans_for_dfa[
     dfa_origin: ImmutableOrigin
 ](
-    nonterminal_map: InternalStrToNode,
+    nonterminal_map: Dict[StaticString, InternalNonterminalType],
     keywords: Keywords,
-    soft_keywords: SoftKeywords,
-    mut automatons: Automatons[dfa_origin],
-    mut first_plans: FirstPlans[dfa_origin],
+    soft_keywords: Dict[InternalTerminalType, Set[StaticString]],
+    mut automatons: Dict[InternalNonterminalType, RuleAutomaton[dfa_origin]],
+    mut first_plans: Dict[InternalNonterminalType, FirstPlan[dfa_origin]],
     automaton_key: InternalNonterminalType,
     dfa_id: DFAStateId,
     is_first_plan: Bool,
-) -> (SquashedTransitions[dfa_origin], Bool):
+) -> (Dict[InternalSquashedType, Plan[dfa_origin]], Bool):
     var conflict_tokens = Set[InternalSquashedType]()
     var conflict_transitions = Set[TransitionType]()
 
@@ -1021,17 +1004,18 @@ fn plans_for_dfa[
                         is materialize[FirstPlan[dfa_origin].Calculating]()
                     ):
                         if node_id != automaton_key:
-                            print(
-                                (
-                                    "Indirect left recursion not supported (in"
-                                    " rule "
-                                ),
-                                nonterminal_to_str(
-                                    nonterminal_map, automaton_key
-                                ),
-                                ")",
+                            abort(
+                                String(
+                                    (
+                                        "Indirect left recursion not supported"
+                                        " (in rule "
+                                    ),
+                                    nonterminal_to_str(
+                                        nonterminal_map, automaton_key
+                                    ),
+                                    ")",
+                                )
                             )
-                            sys.exit(1)
                         is_left_recursive = True
                         continue
                 except:
@@ -1073,8 +1057,7 @@ fn plans_for_dfa[
                         )
 
                 elif fp is materialize[FirstPlan[dfa_origin].Calculating]():
-                    print("this should be unreachable")
-                    sys.exit(1)
+                    abort("this should be unreachable")
             except:
                 pass
 
@@ -1155,8 +1138,7 @@ fn plans_for_dfa[
 
     for c in conflict_tokens:
         if c in plans:
-            print("Assertion error on plans_for_dfa")
-            sys.exit(1)
+            abort("Assertion error on plans_for_dfa")
 
     var result = {it.key: it.value[1].copy() for it in plans.items()}
 
@@ -1180,8 +1162,7 @@ fn plans_for_dfa[
             )
 
             if left_recursive:
-                print("Assert error on left_recursive")
-                sys.exit(1)
+                abort("Assert error on left_recursive")
 
             for it in new_plans.items():
                 ref transition = it.key
@@ -1242,11 +1223,11 @@ fn add_if_no_conflict[
 fn create_left_recursion_plans[
     dfa_origin: ImmutableOrigin
 ](
-    automatons: Automatons[dfa_origin],
+    automatons: Dict[InternalNonterminalType, RuleAutomaton[dfa_origin]],
     automaton_key: InternalNonterminalType,
     dfa_id: DFAStateId,
-    first_plans: FirstPlans[dfa_origin],
-) -> SquashedTransitions[dfa_origin]:
+    first_plans: Dict[InternalNonterminalType, FirstPlan[dfa_origin]],
+) -> Dict[InternalSquashedType, Plan[dfa_origin]]:
     var plans = Dict[InternalSquashedType, Plan[dfa_origin]]()
     ref automaton = automatons.get(automaton_key, {})
     ref dfa_state = automaton.dfa_states[dfa_id.inner]
@@ -1270,13 +1251,15 @@ fn create_left_recursion_plans[
                             var t = InternalSquashedType(i)
                             ref p = opt_p.value()
                             if t in plans:
-                                print(
-                                    "Ambiguous:",
-                                    dfa_state.from_rule,
-                                    (
-                                        "contains left recursion with"
-                                        " alternatives!"
-                                    ),
+                                abort(
+                                    String(
+                                        "Ambiguous:",
+                                        dfa_state.from_rule,
+                                        (
+                                            "contains left recursion with"
+                                            " alternatives!"
+                                        ),
+                                    )
                                 )
                             var dfa_state_ptr = Pointer(to=p.next_dfa())
                             plans[t] = Plan[dfa_origin](
@@ -1340,8 +1323,7 @@ fn calculate_peek_dfa[
             var keyword = transition.type_.get[StaticString]()
             terminals.append(keywords.squashed(keyword).value())
         else:
-            print("Only terminals lookaheads are allowed")
-            sys.exit(1)
+            abort("Only terminals lookaheads are allowed")
 
     return (Pointer(to=next_dfa), terminals^)
 
@@ -1366,15 +1348,13 @@ fn search_lookahead_end[
                 transition.type_ is TransitionType.PositiveLookaheadStart
                 or transition.type_ is TransitionType.NegativeLookaheadStart
             ):
-                print("Unimplemented lookahead end search")
-                sys.exit(1)
+                abort("Unimplemented lookahead end search")
             else:
                 ref to_dfa = transition.next_dfa()
                 if to_dfa.list_index not in already_checked:
                     already_checked.add(to_dfa.list_index)
                     return search(already_checked, to_dfa)
-        print("This should be unreachable.")
-        sys.exit(1)
+        abort("This should be unreachable.")
 
         # NOTE: This never runs
         return dfa_state.transitions[0].next_dfa()
@@ -1430,16 +1410,14 @@ fn split_tokens[
         if len(as_list) > 1:
             var must_be_smaller = as_list[1][0]
             if len(as_list[0]) == 0:
-                print(
+                abort(
                     "This should not be possible.Assertion Error on"
                     " automaton.split_tokens fn."
                 )
-                sys.exit(1)
             while len(as_list[0]) > 0:
                 var nfa_id = as_list[0][0]
                 if nfa_id == must_be_smaller:
-                    print("nfa_id should be distinct than must_be_smaller")
-                    sys.exit(1)
+                    abort("nfa_id should be distinct than must_be_smaller")
                 if nfa_id.inner > must_be_smaller.inner:
                     break
                 new_dfa_nfa_ids.append(as_list[0].pop(0))
@@ -1451,8 +1429,7 @@ fn split_tokens[
             new_dfa_nfa_ids.extend(as_list.pop())
 
         if len(new_dfa_nfa_ids) == 0:
-            print("new_dfa_nfa_ids should not be empty")
-            sys.exit(1)
+            abort("new_dfa_nfa_ids should not be empty")
 
         ref new_dfa = automaton.nfa_to_dfa(
             new_dfa_nfa_ids, automaton.nfa_end_id, dfa.list_index
@@ -1493,11 +1470,12 @@ fn panic_if_unreachable_transition(original_dfa: DFAState, split_dfa: DFAState):
         var t1 = [t.type_ for t in original_dfa.transitions]
         var t2 = [t.type_ for t in split_dfa.transitions]
         if t1 != t2 and split_dfa.is_final:
-            print(
-                "Find and unreachable alternative in the rule",
-                original_dfa.from_rule,
+            abort(
+                String(
+                    "Find and unreachable alternative in the rule",
+                    original_dfa.from_rule,
+                )
             )
-            sys.exit(1)
 
         for t in split_dfa.transitions:
             ref dfa = t.next_dfa()
@@ -1511,14 +1489,14 @@ fn panic_if_unreachable_transition(original_dfa: DFAState, split_dfa: DFAState):
 
 
 fn nonterminal_to_str(
-    nonterminal_map: InternalStrToNode, nonterminal: InternalNonterminalType
+    nonterminal_map: Dict[StaticString, InternalNonterminalType],
+    nonterminal: InternalNonterminalType,
 ) -> StaticString:
     for it in nonterminal_map.items():
         if nonterminal == it.value:
             return it.key
 
-    print("Something is very wrong, integer not found.", nonterminal)
-    sys.exit(1)
+    abort(String("Something is very wrong, integer not found.", nonterminal))
     return {}
 
 
@@ -1538,18 +1516,18 @@ struct FastLookupTransitions[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
     @staticmethod
     fn from_plans(
-        terminal_count: UInt, transitions: SquashedTransitions
+        terminal_count: UInt,
+        transitions: Dict[InternalSquashedType, Plan[dfa_origin]],
     ) -> Self:
         if terminal_count == 0:
-            print("Invalid state for terminal count:", terminal_count)
-            sys.exit(1)
+            abort(String("Invalid state for terminal count:", terminal_count))
 
         var lst: List[Optional[Plan[dfa_origin]]] = [
             None for _ in range(terminal_count)
         ]
         return Self(lst^)
 
-    fn extend(mut self, other: SquashedTransitions[dfa_origin]):
+    fn extend(mut self, other: Dict[InternalSquashedType, Plan[dfa_origin]]):
         for it in other.items():
             ref index = it.key
             ref plan = it.value
