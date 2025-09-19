@@ -3,9 +3,7 @@ alias lit[l: IntLiteral] = __type_of(l).value
 
 @fieldwise_init
 @register_passable("trivial")
-struct TransitionTypeVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]](
-    EqualityComparable
-):
+struct TransitionTypeVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]]:
     alias Invalid = TransitionTypeVariant[]()
 
     alias Terminal = TransitionTypeVariant[lit[0]]()
@@ -16,14 +14,6 @@ struct TransitionTypeVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]](
     alias LookaheadEnd = TransitionTypeVariant[lit[5]]()
 
     alias value = IntLiteral[_v]()
-
-    @always_inline("builtin")
-    fn __eq__(self, other: Self) -> Bool:
-        return True
-
-    @always_inline("builtin")
-    fn __eq__(self, other: TransitionTypeVariant) -> Bool:
-        return self.value == other.value
 
     fn matches(self, other: TransitionType) -> Bool:
         return self.value == other.variant

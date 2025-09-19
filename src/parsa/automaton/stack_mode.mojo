@@ -1,24 +1,14 @@
-from parsa.automaton import Plan
+alias lit[i: IntLiteral] = __type_of(i).value
 
 
 @fieldwise_init
 @register_passable("trivial")
-struct StackModeVariant[
-    _v: __mlir_type[`!pop.int_literal`] = __type_of(-1).value
-](EqualityComparable):
+struct StackModeVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]]:
     alias Invalid = StackModeVariant[]()
-    alias Alternative = StackModeVariant[__type_of(0).value]()
-    alias LL = StackModeVariant[__type_of(1).value]()
+    alias Alternative = StackModeVariant[lit[0]]()
+    alias LL = StackModeVariant[lit[1]]()
 
     alias value = IntLiteral[_v]()
-
-    @always_inline("builtin")
-    fn __eq__(self, other: Self) -> Bool:
-        return True
-
-    @always_inline("builtin")
-    fn __eq__(self, other: StackModeVariant[_]) -> Bool:
-        return self.value == other.value
 
     fn matches(self, stack_mode: StackMode) -> Bool:
         return self.value == stack_mode.variant
@@ -72,41 +62,3 @@ struct StackMode[dfa_origin: ImmutableOrigin](
             )
         else:
             w.write("LL")
-
-
-# @fieldwise_init
-# struct StackMode[dfa_origin: ImmutableOrigin](
-#     Copyable, EqualityComparable, Identifiable, Movable, Writable
-# ):
-#     var variant: StackModeVariant
-#     var inner: UnsafePointer[Plan[dfa_origin], mut=False]
-
-#     fn __eq__(self, other: Self) -> Bool:
-#         var inner_is_eq = (
-#             self.inner and other.inner and self.inner == other.inner
-#         ) or not (self.inner or other.inner)
-
-#         return self.variant == other.variant and inner_is_eq
-
-#     fn matches(self, other: StackModeVariant) -> Bool:
-#         return self.variant == other
-
-#     fn get(self) -> ref [StaticConstantOrigin] Plan[dfa_origin]:
-#         if self is materialize[Self.Alternative]():
-#             return self.inner[]
-
-#         abort("Invalid getter for StackMode")
-#         return self.inner[]
-
-#     fn write_to(self, mut w: Some[Writer]):
-#         if self.matches(Self.Alternative):
-#             ref dfa = self.inner[].next_dfa()
-#             w.write(
-#                 "Alternative(",
-#                 dfa.from_rule,
-#                 " #",
-#                 dfa.list_index.inner,
-#                 ")",
-#             )
-#         else:
-#             w.write("LL")

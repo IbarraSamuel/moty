@@ -3,9 +3,7 @@ alias lit[l: IntLiteral] = __type_of(l).value
 
 @fieldwise_init
 @register_passable("trivial")
-struct RuleVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]](
-    EqualityComparable
-):
+struct RuleVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]]:
     alias Invalid = RuleVariant[]()
 
     alias Identifier = RuleVariant[lit[0]]()
@@ -20,14 +18,6 @@ struct RuleVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]](
     alias NodeMayBeOmmited = RuleVariant[lit[9]]()
     alias DoesErrorRecovery = RuleVariant[lit[10]]()
     alias value = IntLiteral[_v]()
-
-    @always_inline("builtin")
-    fn __eq__(self, other: Self) -> Bool:
-        return True
-
-    @always_inline("builtin")
-    fn __eq__(self, other: RuleVariant) -> Bool:
-        return False
 
     fn matches(self, other: Rule) -> Bool:
         return self.value == other.variant

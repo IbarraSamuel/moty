@@ -3,22 +3,12 @@ alias lit[l: IntLiteral] = __type_of(l).value
 
 @fieldwise_init
 @register_passable("trivial")
-struct FirstPlanVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]](
-    EqualityComparable
-):
+struct FirstPlanVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]]:
     alias Invalid = FirstPlanVariant[]()
     alias Calculated = FirstPlanVariant[lit[0]]()
     alias Calculating = FirstPlanVariant[lit[1]]()
 
     alias value = IntLiteral[_v]()
-
-    @always_inline("builtin")
-    fn __eq__(self, other: Self) -> Bool:
-        return True
-
-    @always_inline("builtin")
-    fn __eq__(self, other: FirstPlanVariant) -> Bool:
-        return False
 
     fn matches(self, other: FirstPlan) -> Bool:
         return self.value == other.variant
