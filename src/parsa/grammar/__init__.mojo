@@ -16,7 +16,9 @@ from parsa.automaton import (
     generate_automatons,
 )
 
-from utils import Variant
+from parsa.grammar.mode_data import ModeData, ModeDataVariant
+
+# from utils import Variant
 
 # Backtracking??
 
@@ -83,8 +85,10 @@ struct Grammar[T: AnyType]:
     var keywords: Keywords
     var soft_keywords: SoftKeywords
 
-    fn __init__(
-        out self,
+    fn __init__[
+        token: Token
+    ](
+        out self: Grammar[token],
         rules: RuleMap,
         ref [StaticConstantOrigin]nonterminal_map: InternalStrToNode,
         ref [StaticConstantOrigin]terminal_map: InternalStrToToken,
@@ -98,19 +102,6 @@ struct Grammar[T: AnyType]:
         self.automatons = automatons.copy()
         self.keywords = keywords.copy()
         self.soft_keywords = soft_keywords^
-
-
-alias ModeData[backtracking: ImmutableOrigin] = Variant[
-    ModeDataAlternative[backtracking], ModeDataLL
-]
-
-
-struct ModeDataAlternative[backtracking: ImmutableOrigin](Copyable, Movable):
-    var inner: BacktrackingPoint[backtracking]
-
-
-struct ModeDataLL(Copyable, Movable):
-    pass
 
 
 struct BacktrackingPoint[fallback: ImmutableOrigin](Copyable, Movable):
@@ -152,7 +143,99 @@ struct StackNode[dfa_origin: ImmutableOrigin](Copyable, Movable):
             ")",
         )
 
+    @always_inline
+    fn can_omit_children(self) -> Bool:
+        return self.dfa_state.node_may_be_ommited and self.children_count == 1
 
-struct Stack[node_origin: ImmutableOrigin]:
+
+struct Stack[node_origin: ImmutableOrigin](Sized):
     var stack_nodes: List[StackNode[node_origin]]
     var tree_nodes: List[InternalNode]
+
+    fn __init__(
+        out self,
+        var node_id: InternalNonterminalType,
+        ref [node_origin]dfa_state: DFAState,
+        string_len: Int,
+    ):
+        self.stack_nodes = List[StackMode[node_origin]](capacity=128)
+        self.tree_nodes = List[InternalNode](capacity=string_len / 4)
+        self.push(node_id, 0, dfa_state, 0, ModeDataVariant.LL.new(), 0, False)
+
+    @always_inline
+    fn tos(self) -> ref [self.stack_nodes[0]] StackNode[node_origin]:
+        return self.stack_nodes.unsafe_get(len(self) - 1)
+
+    @always_inline
+    fn tos_mut(mut self) -> ref [self.stack_nodes[0]] StackNode[node_origin]:
+        return self.stack_nodes.unsafe_get(len(self) - 1)
+
+    @always_inline
+    fn __len__(self) -> Int:
+        len(self.stack_nodes)
+
+    @always_inline
+    fn pop_normal(mut self):
+        ref stack_mode = self.stack_nodes.pop()
+        if stack_node.can_omit_children():
+            self.tree_nodes.remove(stack_node.tree_node_index)
+        else:
+            debug_assert(stack_node.children_count >= 1)
+            update_tree_node_position(self.tree_nodes, stack_mode)
+
+    @always_inline
+    fn push(
+        mut self,
+        node_id: InternalNonterminalType,
+        tree_node_index: Int,
+        ref [node_origin]dfa_state: DFAState,
+        start: CodeIndex,
+        node: ModeData[node_origin],
+        children_count: Int,
+        enabled_token_recording: Bool,
+    ):
+        self.stack_nodes.push(
+            StackNode(
+                node_id,
+                tree_node_index,
+                0,
+                dfa_state,
+                children_count,
+                mode,
+                enabled_token_recording,
+            )
+        )
+
+        if ModeDataVariant.LL.matches(mode):
+            self.tree_nodes.pushes(
+                InternalNode(0, node_id.to_squashed(), start, 0)
+            )
+
+    @always_inline
+    fn calculate_previous_next_node(mut self):
+        ref tos = self.stack_nodes.unsafe_get(len(self) - 1)
+        var index = tos.latest_children_node_index
+
+        var next = len(self.tree_nodes)
+
+        if index != 0 and index in self.tree_nodes:
+            self.tree_nodes.unsafe_get(index).next_node_offset = next - index
+
+        tos.latest_child_node_index = next
+
+    fn debug_tree(
+        self,
+        nonterminal_map: InternalStrToNode,
+        terminal_map: InternalStrToToken,
+    ) -> String:
+        # TODO
+        ...
+
+
+@always_inline
+fn update_tree_node_position(
+    mut tree_nodes: List[InternalNode], stack_node: StackNode
+):
+    var last_tree_node = tree_nodes[-1]
+    var n = tree_nodes[stack_node.tree_node_index]
+    n.length = last_tree_node.end_index() - n.start_index
