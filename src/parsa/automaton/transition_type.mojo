@@ -1,89 +1,93 @@
-from os import abort
-from sys.intrinsics import _type_is_eq
+alias lit[l: IntLiteral] = __type_of(l).value
 
 
 @fieldwise_init
 @register_passable("trivial")
-struct TransitionTypeVariant(EqualityComparable):
-    alias Invalid = -1
+struct TransitionTypeVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]](
+    EqualityComparable
+):
+    alias Invalid = TransitionTypeVariant[]()
 
-    alias Terminal = Self(0)
-    alias Nonterminal = Self(1)
-    alias Keyword = Self(2)
-    alias PositiveLookaheadStart = Self(3)
-    alias NegativeLookaheadStart = Self(4)
-    alias LookaheadEnd = Self(5)
+    alias Terminal = TransitionTypeVariant[lit[0]]()
+    alias Nonterminal = TransitionTypeVariant[lit[1]]()
+    alias Keyword = TransitionTypeVariant[lit[2]]()
+    alias PositiveLookaheadStart = TransitionTypeVariant[lit[3]]()
+    alias NegativeLookaheadStart = TransitionTypeVariant[lit[4]]()
+    alias LookaheadEnd = TransitionTypeVariant[lit[5]]()
 
-    var _v: Int
+    alias value = IntLiteral[_v]()
 
-    @always_inline
+    @always_inline("builtin")
     fn __eq__(self, other: Self) -> Bool:
-        return self._v == other._v
+        return True
 
-    @always_inline("nodebug")
-    fn __call__(
-        var self,
-        *,
-        var terminal: InternalTerminalType = {},
-        var nonterminal: InternalNonterminalType = {},
-        var string: StaticString = {},
+    @always_inline("builtin")
+    fn __eq__(self, other: TransitionTypeVariant) -> Bool:
+        return self.value == other.value
+
+    fn matches(self, other: TransitionType) -> Bool:
+        return self.value == other.variant
+
+    fn new(
+        var self: __type_of(Self.Terminal),
+        terminal: InternalTerminalType,
+        string: StaticString,
     ) -> TransitionType:
-        if not (
-            (self == Self.Terminal and terminal != {} and string != {})
-            or (self == Self.Nonterminal and nonterminal != {})
-            or (self == Self.Keyword and string != {})
-            or (self == Self.PositiveLookaheadStart)
-            or (self == Self.NegativeLookaheadStart)
-            or (self == Self.LookaheadEnd)
-        ):
-            abort("Invalid transition type initialization.")
+        return {self.value, {terminal, {}, string}}
 
-        return TransitionType(self, (terminal, nonterminal, string))
+    fn new(
+        var self: __type_of(Self.Nonterminal),
+        nonterminal: InternalNonterminalType,
+    ) -> TransitionType:
+        return {self.value, {{}, nonterminal, {}}}
+
+    fn new(
+        var self: __type_of(Self.Keyword), string: StaticString
+    ) -> TransitionType:
+        return {self.value, {{}, {}, string}}
+
+    fn new(var self: __type_of(Self.PositiveLookaheadStart)) -> TransitionType:
+        return {self.value, {{}, {}, {}}}
+
+    fn new(var self: __type_of(Self.NegativeLookaheadStart)) -> TransitionType:
+        return {self.value, {{}, {}, {}}}
+
+    fn new(var self: __type_of(Self.LookaheadEnd)) -> TransitionType:
+        return {self.value, {{}, {}, {}}}
+
+    fn __getitem__(
+        var self: __type_of(Self.Terminal), transition_type: TransitionType
+    ) -> (InternalTerminalType, StaticString):
+        return (transition_type.inner[0], transition_type.inner[2])
+
+    fn __getitem__(
+        var self: __type_of(Self.Nonterminal), transition_type: TransitionType
+    ) -> InternalNonterminalType:
+        return transition_type.inner[1]
+
+    fn __getitem__(
+        var self: __type_of(Self.Keyword), transition_type: TransitionType
+    ) -> StaticString:
+        return transition_type.inner[2]
 
 
 @fieldwise_init
 struct TransitionType(
     EqualityComparable, Hashable, ImplicitlyCopyable, Movable
 ):
-    var variant: TransitionTypeVariant
+    var variant: Int
     var inner: (InternalTerminalType, InternalNonterminalType, StaticString)
-
-    @always_inline("nodebug")
-    fn matches(self, other: TransitionTypeVariant) -> Bool:
-        return self.variant == other
 
     fn __eq__(self, other: Self) -> Bool:
         return (
-            self.variant._v == other.variant._v
+            self.variant == other.variant
             and self.inner[0] == other.inner[0]
             and self.inner[1] == other.inner[1]
             and self.inner[2] == other.inner[2]
         )
 
     fn __hash__(self, mut h: Some[Hasher]):
-        h.update(self.variant._v)
+        h.update(self.variant)
         h.update(self.inner[0])
         h.update(self.inner[1])
         h.update(self.inner[2])
-
-    # Getters
-    fn get[t: Copyable](self) -> t:
-        if (
-            self.matches(TransitionTypeVariant.Terminal)
-            and _type_is_eq[t, (InternalTerminalType, StaticString)]()
-        ):
-            return rebind[t]((self.inner[0], self.inner[2])).copy()
-        elif (
-            self.matches(TransitionTypeVariant.Nonterminal)
-            and _type_is_eq[t, InternalNonterminalType]()
-        ):
-            return rebind[t](self.inner[1]).copy()
-        elif (
-            self.matches(TransitionTypeVariant.Keyword)
-            and _type_is_eq[t, StaticString]()
-        ):
-            return rebind[t](self.inner[2]).copy()
-
-        abort("Transition Type doesn't have values to get.")
-        # NOTE: This never runs
-        return rebind[t](self.inner).copy()

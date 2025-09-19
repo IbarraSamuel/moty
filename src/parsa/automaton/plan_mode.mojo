@@ -1,18 +1,27 @@
+alias lit[l: IntLiteral] = __type_of(l).value
+
+
+@fieldwise_init
+@register_passable("trivial")
+struct PlanModeVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]]:
+    alias Invalid = PlanModeVariant[]()
+    alias LeftRecursive = PlanModeVariant[lit[0]]()
+    alias LL = PlanModeVariant[lit[1]]()
+    alias PositivePeek = PlanModeVariant[lit[2]]()
+
+    alias value = IntLiteral[_v]()
+
+    fn matches(self, plan_mode: PlanMode) -> Bool:
+        return self.value == plan_mode.variant
+
+    fn new(var self) -> PlanMode:
+        return PlanMode(self.value)
+
+
+@fieldwise_init
 @register_passable("trivial")
 struct PlanMode(Writable):
-    alias Invalid = -1
-    alias LeftRecursive = 0
-    alias LL = 1
-    alias PositivePeek = 2
-
-    var _v: Int
-
-    @implicit
-    fn __init__(out self, v: Int = Self.Invalid):
-        self._v = v
-
-    fn matches(self, other: Int) -> Bool:
-        return self._v == other
+    var variant: Int
 
     fn write_to(self, mut w: Some[Writer]):
-        w.write("PlanMode(", self._v, ")")
+        w.write("PlanMode(", self.variant, ")")

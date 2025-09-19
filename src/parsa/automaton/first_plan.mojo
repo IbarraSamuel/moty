@@ -1,50 +1,51 @@
+alias lit[l: IntLiteral] = __type_of(l).value
+
+
 @fieldwise_init
 @register_passable("trivial")
-struct FirstPlanVariant(EqualityComparable):
-    alias Invalid = Self(-1)
-    alias Calculated = Self(0)
-    alias Calculating = Self(1)
+struct FirstPlanVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]](
+    EqualityComparable
+):
+    alias Invalid = FirstPlanVariant[]()
+    alias Calculated = FirstPlanVariant[lit[0]]()
+    alias Calculating = FirstPlanVariant[lit[1]]()
 
-    var _v: Int
+    alias value = IntLiteral[_v]()
 
+    @always_inline("builtin")
     fn __eq__(self, other: Self) -> Bool:
-        return self._v == other._v
+        return True
 
-    @always_inline("nodebug")
-    fn __call__[
+    @always_inline("builtin")
+    fn __eq__(self, other: FirstPlanVariant) -> Bool:
+        return False
+
+    fn matches(self, other: FirstPlan) -> Bool:
+        return self.value == other.variant
+
+    fn new[
         dfa_origin: ImmutableOrigin
     ](
-        var self,
-        *,
-        var plans: Dict[InternalSquashedType, Plan[dfa_origin]] = {},
-        var is_left_recursive: Bool = {},
+        var self: __type_of(Self.Calculated),
+        var plans: Dict[InternalSquashedType, Plan[dfa_origin]],
+        is_left_recursive: Bool,
     ) -> FirstPlan[dfa_origin]:
-        # new_self = (self._v)
-        if (
-            self == FirstPlanVariant.Calculated
-            and len(plans) == 0
-            and is_left_recursive != {}
-        ):
-            return FirstPlan(self, (plans^, is_left_recursive))
+        return {self.value, {plans^, is_left_recursive}}
 
-        elif self == Self.Calculating:
-            return FirstPlan[dfa_origin](self, {{}, {}})
+    fn new[
+        dfa_origin: ImmutableOrigin
+    ](var self: __type_of(Self.Calculating)) -> FirstPlan[dfa_origin]:
+        return {self.value, {{}, {}}}
 
-        abort("Failed to create first plan.")
-        return FirstPlan(self, (plans^, is_left_recursive))
+    fn __getitem__(
+        var self: __type_of(Self.Calculated), first_plan: FirstPlan
+    ) -> ref [first_plan.inner] Tuple[
+        Dict[InternalSquashedType, Plan[first_plan.dfa_origin]], Bool
+    ]:
+        return first_plan.inner
 
 
 @fieldwise_init
 struct FirstPlan[dfa_origin: ImmutableOrigin](Copyable, Movable):
-    var variant: FirstPlanVariant
+    var variant: Int
     var inner: Tuple[Dict[InternalSquashedType, Plan[dfa_origin]], Bool]
-
-    fn matches(self, other: FirstPlanVariant) -> Bool:
-        return self.variant == other
-
-    fn get(
-        self,
-    ) -> ref [self.inner] (Dict[InternalSquashedType, Plan[dfa_origin]], Bool,):
-        if not (self.variant == FirstPlanVariant.Calculated):
-            abort("Invalid getter for FirstPlan.Calculated.")
-        return self.inner

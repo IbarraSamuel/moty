@@ -1,6 +1,5 @@
 from hashlib import Hasher
 from collections import Set
-from sys.intrinsics import _type_is_eq
 from os import abort
 
 from parsa.automaton.transition_type import (
@@ -8,12 +7,20 @@ from parsa.automaton.transition_type import (
     TransitionTypeVariant,
 )
 from parsa.automaton.rule import Rule, RuleVariant
-from parsa.automaton.plan_mode import PlanMode
+from parsa.automaton.plan_mode import PlanMode, PlanModeVariant
 from parsa.automaton.first_plan import FirstPlan, FirstPlanVariant
 from parsa.automaton.stack_mode import StackMode, StackModeVariant
 
 alias NODE_START: UInt16 = 1 << 15
 alias ERROR_RECOVERY_BIT: UInt16 = 1 << 14
+
+alias Automatons[dfa_origin: ImmutableOrigin] = Dict[
+    InternalNonterminalType, RuleAutomaton[dfa_origin]
+]
+alias InternalStrToNode = Dict[StaticString, InternalNonterminalType]
+alias InternalStrToToken = Dict[StaticString, InternalTerminalType]
+alias RuleMap = Dict[InternalNonterminalType, (StaticString, Rule)]
+alias SoftKeywords = Dict[InternalTerminalType, Set[StaticString]]
 
 # TODO THINGS:
 # 1. move out all these Materialize things.
@@ -139,8 +146,8 @@ struct NFAState(Copyable, Movable):
 
     fn is_lookahead_end(self) -> Bool:
         for t in self.transitions:
-            if t.type_ and t.type_.value().matches(
-                TransitionTypeVariant.LookaheadEnd
+            if t.type_ and TransitionTypeVariant.LookaheadEnd.matches(
+                t.type_.value()
             ):
                 return True
         return False
@@ -161,16 +168,16 @@ struct DFAState[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
     fn is_lookahead_end(self) -> Bool:
         for t in self.transitions:
-            if t.type_.matches(TransitionTypeVariant.LookaheadEnd):
+            if TransitionTypeVariant.LookaheadEnd.matches(t.type_):
                 return True
 
         return False
 
     fn nonterminal_transition_ids(self) -> List[InternalNonterminalType]:
         return [
-            t.type_.get[InternalNonterminalType]()
+            TransitionTypeVariant.Nonterminal[t.type_]
             for t in self.transitions
-            if t.type_.matches(TransitionTypeVariant.Nonterminal)
+            if TransitionTypeVariant.Nonterminal.matches(t.type_)
         ]
 
 
@@ -181,9 +188,9 @@ struct NFATransition(Copyable, Movable):
 
     fn is_terminal_nonterminal_or_keyword(self) -> Bool:
         return self.type_ and (
-            self.type_.value().matches(TransitionTypeVariant.Terminal)
-            or self.type_.value().matches(TransitionTypeVariant.Nonterminal)
-            or self.type_.value().matches(TransitionTypeVariant.Keyword)
+            TransitionTypeVariant.Terminal.matches(self.type_.value())
+            or TransitionTypeVariant.Nonterminal.matches(self.type_.value())
+            or TransitionTypeVariant.Keyword.matches(self.type_.value())
         )
 
 
@@ -387,24 +394,22 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
                 nonterminal_map, terminal_map, keywords, rule
             )
 
-        if rule.matches(RuleVariant.Identifier):
-            var string = rule.get[StaticString]()
+        if RuleVariant.Identifier.matches(rule):
+            var string = RuleVariant.Identifier[rule]
             var start, end = self.new_nfa_states()
             var t = terminal_map.get(string)
             if t:
                 self.add_transition(
                     start,
                     end,
-                    TransitionTypeVariant.Terminal(
-                        terminal=t.value(), string=string
-                    ),
+                    TransitionTypeVariant.Terminal.new(t.value(), string),
                 )
             elif nonterminal_map.get(string):
                 var nt = nonterminal_map.get(string)
                 self.add_transition(
                     start,
                     end,
-                    TransitionTypeVariant.Nonterminal(nonterminal=nt.value()),
+                    TransitionTypeVariant.Nonterminal.new(nt.value()),
                 )
             else:
                 abort(
@@ -420,80 +425,84 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
             return (start, end)
 
-        elif rule.matches(RuleVariant.Keyword):
-            var string = rule.get[StaticString]()
+        elif RuleVariant.Keyword.matches(rule):
+            var string = RuleVariant.Keyword[rule]
             var start, end = self.new_nfa_states()
             self.add_transition(
-                start, end, TransitionTypeVariant.Keyword(string=string)
+                start, end, TransitionTypeVariant.Keyword.new(string)
             )
             keywords.add(string)
             return (start, end)
 
-        elif rule.matches(RuleVariant.Or):
-            var rules = rule.get[(Rule, Rule)]()
+        elif RuleVariant.Or.matches(rule):
+            var rules = RuleVariant.Or[rule]
             var start, end = self.new_nfa_states()
 
             @parameter
             for i in range(2):
-                var x, y = _build(self, rules[i])
+                var x, y = _build(self, rules[i][])
                 self.add_empty_transition(start, x)
                 self.add_empty_transition(y, end)
             return (start, end)
 
-        elif rule.matches(RuleVariant.Maybe):
-            var rule1 = rule.get[Rule]()
+        elif RuleVariant.Maybe.matches(rule):
+            ref rule1 = RuleVariant.Maybe[rule]
             var start, end = _build(self, rule1)
             self.add_empty_transition(start, end)
             return (start, end)
 
-        elif rule.matches(RuleVariant.Multiple):
-            var rule1 = rule.get[Rule]()
+        elif RuleVariant.Multiple.matches(rule):
+            ref rule1 = RuleVariant.Multiple[rule]
             var start, end = _build(self, rule1)
             self.add_empty_transition(end, start)
             return (start, end)
 
-        elif rule.matches(RuleVariant.NegativeLookahead):
-            var rule1 = rule.get[Rule]()
+        elif RuleVariant.NegativeLookahead.matches(rule):
+            ref rule1 = RuleVariant.NegativeLookahead[rule]
             var start, end = _build(self, rule1)
             var new_start, new_end = self.new_nfa_states()
             self.add_transition(
-                new_start, start, TransitionTypeVariant.NegativeLookaheadStart()
+                new_start,
+                start,
+                TransitionTypeVariant.NegativeLookaheadStart.new(),
             )
             self.add_transition(
-                end, new_end, TransitionTypeVariant.LookaheadEnd()
+                end, new_end, TransitionTypeVariant.LookaheadEnd.new()
             )
             return (new_start, new_end)
 
-        elif rule.matches(RuleVariant.PositiveLookahead):
-            var rule1 = rule.get[Rule]()
+        elif RuleVariant.PositiveLookahead.matches(rule):
+            ref rule1 = RuleVariant.PositiveLookahead[rule]
             var start, end = _build(self, rule1)
             var new_start, new_end = self.new_nfa_states()
             self.add_transition(
-                new_start, start, TransitionTypeVariant.PositiveLookaheadStart()
+                new_start,
+                start,
+                TransitionTypeVariant.PositiveLookaheadStart.new(),
             )
             self.add_transition(
-                end, new_end, TransitionTypeVariant.LookaheadEnd()
+                end, new_end, TransitionTypeVariant.LookaheadEnd.new()
             )
             return (new_start, new_end)
 
         # TODO: Unimplemented
-        elif rule.matches(RuleVariant.Cut):
+        elif RuleVariant.Cut.matches(rule):
             abort("TODO: UNIMPLEMENTED")
 
-        elif rule.matches(RuleVariant.Next):
-            ref rule1, rule2 = rule.get[(Rule, Rule)]()
-            var start1, end1 = _build(self, rule1)
-            var start2, end2 = _build(self, rule2)
+        elif RuleVariant.Next.matches(rule):
+            ref rule1, rule2 = RuleVariant.Next[rule]
+            var start1, end1 = _build(self, rule1[])
+            var start2, end2 = _build(self, rule2[])
             # What is it doing here?
             self.add_empty_transition(end1, start2)
             return (start1, end2)
 
-        elif rule.matches(RuleVariant.NodeMayBeOmmited):
-            var _rule = rule.get[Rule]()
+        elif RuleVariant.NodeMayBeOmmited.matches(rule):
+            ref _rule = RuleVariant.NodeMayBeOmmited[rule]
             self.node_may_be_ommited = True
             return _build(self, _rule)
-        elif rule.matches(RuleVariant.DoesErrorRecovery):
-            var _rule = rule.get[Rule]()
+        elif RuleVariant.DoesErrorRecovery.matches(rule):
+            ref _rule = RuleVariant.DoesErrorRecovery[rule]
             self.does_error_recovery = True
             return _build(self, _rule)
 
@@ -622,7 +631,7 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
         state.is_final |= any(
             [
-                t.type_.matches(TransitionTypeVariant.NegativeLookaheadStart)
+                TransitionTypeVariant.NegativeLookaheadStart.matches(t.type_)
                 and search_lookahead_end(t.next_dfa()).is_final
                 for t in state.transitions
             ]
@@ -645,8 +654,11 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
         var any_negative = False
         for st in self.nfa_states:
             for t in st.transitions:
-                if t.type_ and t.type_.value().matches(
-                    TransitionTypeVariant.NegativeLookaheadStart
+                if (
+                    t.type_
+                    and TransitionTypeVariant.NegativeLookaheadStart.matches(
+                        t.type_.value()
+                    )
                 ):
                     any_negative = True
                     break
@@ -676,7 +688,7 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
 
 fn generate_automatons[
-    dfa_origin: ImmutableOrigin
+    dfa_origin: ImmutableOrigin = StaticConstantOrigin
 ](
     nonterminal_map: Dict[StaticString, InternalNonterminalType],
     terminal_map: Dict[StaticString, InternalTerminalType],
@@ -737,8 +749,8 @@ fn generate_automatons[
 
         try:
             ref rl = first_plans[rule_label]
-            if rl.matches(FirstPlanVariant.Calculated):
-                ref plans, _ = rl.get()
+            if FirstPlanVariant.Calculated.matches(rl):
+                ref plans, _ = FirstPlanVariant.Calculated[rl]
                 automaton.dfa_states[
                     0
                 ].transition_to_plan = FastLookupTransitions[
@@ -795,7 +807,7 @@ fn create_first_plans[
     automaton_key: InternalNonterminalType,
 ):
     if not first_plans.get(automaton_key):
-        first_plans[automaton_key] = FirstPlanVariant.Calculating.__call__[
+        first_plans[automaton_key] = FirstPlanVariant.Calculating.new[
             dfa_origin
         ]()
 
@@ -820,7 +832,7 @@ fn create_first_plans[
                 )
             )
 
-        first_plans[automaton_key] = FirstPlanVariant.Calculated(
+        first_plans[automaton_key] = FirstPlanVariant.Calculated.new(
             plans=plans.copy(), is_left_recursive=is_left_recursive
         )
 
@@ -851,10 +863,8 @@ fn plans_for_dfa[
 
     for transition in dfa_state.transitions:
         ref ttype = transition.type_
-        if ttype.matches(TransitionTypeVariant.Terminal):
-            ref type_, debug_text = ttype.get[
-                (InternalTerminalType, StaticString)
-            ]()
+        if TransitionTypeVariant.Terminal.matches(ttype):
+            ref type_, debug_text = TransitionTypeVariant.Terminal[ttype]
             var t = type_.to_squashed()
 
             @parameter
@@ -864,7 +874,7 @@ fn plans_for_dfa[
                     next_dfa=transition.to[],
                     type_=t,
                     debug_text=debug_text,
-                    mode=PlanMode.LL,
+                    mode=PlanModeVariant.LL.new(),
                 )
 
             add_if_no_conflict[dfa_origin, new_plan](
@@ -885,7 +895,7 @@ fn plans_for_dfa[
                         conflict_transitions,
                         conflict_tokens,
                         DFATransition(
-                            type_=TransitionTypeVariant.Keyword(string=kw),
+                            type_=TransitionTypeVariant.Keyword.new(kw),
                             to=transition.to[],
                         ),
                         soft_keyword_type,
@@ -894,12 +904,12 @@ fn plans_for_dfa[
             except:
                 pass
 
-        elif ttype.matches(TransitionTypeVariant.Nonterminal):
-            ref node_id = ttype.get[InternalNonterminalType]()
+        elif TransitionTypeVariant.Nonterminal.matches(ttype):
+            var node_id = TransitionTypeVariant.Nonterminal[ttype]
             if is_first_plan:
                 try:
-                    if first_plans[node_id].matches(
-                        FirstPlanVariant.Calculating
+                    if FirstPlanVariant.Calculating.matches(
+                        first_plans[node_id]
                     ):
                         if node_id != automaton_key:
                             abort(
@@ -930,8 +940,8 @@ fn plans_for_dfa[
 
             try:
                 ref fp = first_plans[node_id]
-                if fp.matches(FirstPlanVariant.Calculated):
-                    ref transitions = fp.get()[0]
+                if FirstPlanVariant.Calculated.matches(fp):
+                    ref transitions, _ = FirstPlanVariant.Calculated[fp]
                     for it in transitions.items():
                         ref t = it.key
                         # ref nested_plan = it.value
@@ -942,7 +952,7 @@ fn plans_for_dfa[
                                 it.value,  # this is nested_plan, but I removed to get rid of a warning
                                 node_id,
                                 transition.to,
-                                StackModeVariant.LL(),
+                                StackModeVariant.LL.new[dfa_origin](),
                             )
 
                         add_if_no_conflict[dfa_origin, create_plan](
@@ -954,13 +964,13 @@ fn plans_for_dfa[
                             # create_plan,
                         )
 
-                elif fp.matches(FirstPlanVariant.Calculating):
+                elif FirstPlanVariant.Calculating.matches(fp):
                     abort("this should be unreachable")
             except:
                 pass
 
-        elif ttype.matches(TransitionTypeVariant.Keyword):
-            ref keyword = ttype.get[StaticString]()
+        elif TransitionTypeVariant.Keyword.matches(ttype):
+            var keyword = TransitionTypeVariant.Keyword[ttype]
             var t = keywords.squashed(keyword).value()
 
             @parameter
@@ -970,7 +980,7 @@ fn plans_for_dfa[
                     next_dfa=transition.to[],
                     type_=t,
                     debug_text=keyword,
-                    mode=PlanMode.LL,
+                    mode=PlanModeVariant.LL.new(),
                 )
 
             add_if_no_conflict[dfa_origin, create_other_plan](
@@ -982,7 +992,7 @@ fn plans_for_dfa[
                 # create_plan,
             )
 
-        elif ttype.matches(TransitionTypeVariant.PositiveLookaheadStart):
+        elif TransitionTypeVariant.PositiveLookaheadStart.matches(ttype):
             ref next_dfa, peek_terminals = calculate_peek_dfa(
                 keywords, transition
             )
@@ -992,13 +1002,13 @@ fn plans_for_dfa[
                     transition.copy(),
                     Plan[dfa_origin](
                         debug_text="positive lookahead",
-                        mode=PlanMode.PositivePeek,
+                        mode=PlanModeVariant.PositivePeek.new(),
                         next_dfa=next_dfa[],
                         pushes=[],
                         type_=t,
                     ),
                 )
-        elif ttype.matches(TransitionTypeVariant.NegativeLookaheadStart):
+        elif TransitionTypeVariant.NegativeLookaheadStart.matches(ttype):
             ref next_dfa, peek_terminals = calculate_peek_dfa(
                 keywords, transition
             )
@@ -1019,7 +1029,7 @@ fn plans_for_dfa[
                     ref dfa_state = automaton.dfa_states[empty_dfa_id.inner]
                     next_plans[t] = Plan[dfa_origin](
                         debug_text="Negative lookahead abort",
-                        mode=PlanMode.LL,
+                        mode=PlanModeVariant.LL.new(),
                         next_dfa=dfa_state,
                         pushes=[],
                         type_=t,
@@ -1031,7 +1041,7 @@ fn plans_for_dfa[
                 it.key: (transition.copy(), it.value.copy())
                 for it in next_plans.items()
             }
-        elif ttype.matches(TransitionTypeVariant.LookaheadEnd):
+        elif TransitionTypeVariant.LookaheadEnd.matches(ttype):
             continue
 
     for c in conflict_tokens:
@@ -1074,11 +1084,9 @@ fn plans_for_dfa[
                             new_plan,
                             t,
                             Pointer[origin=MutableAnyOrigin](to=end[]),
-                            StackMode[dfa_origin].Alternative(
-                                plan=UnsafePointer(
-                                    to=automaton.fallback_plans.unsafe_get(
-                                        len(automaton.fallback_plans) - 1
-                                    )
+                            StackModeVariant.Alternative.new(
+                                plan=automaton.fallback_plans.unsafe_get(
+                                    len(automaton.fallback_plans) - 1
                                 )
                             ),
                         )
@@ -1132,15 +1140,15 @@ fn create_left_recursion_plans[
 
     if dfa_state.is_final and not dfa_state.is_lookahead_end():
         ref first_plan = first_plans.get(automaton.type_).value()
-        if first_plan.matches(FirstPlanVariant.Calculated):
-            ref is_left_recursive = first_plan.get()[1]
+        if FirstPlanVariant.Calculated.matches(first_plan):
+            ref _, is_left_recursive = FirstPlanVariant.Calculated[first_plan]
             if is_left_recursive:
                 for transition in automaton.dfa_states[0].transitions:
                     if (
-                        transition.type_.matches(
-                            TransitionTypeVariant.Nonterminal
+                        TransitionTypeVariant.Nonterminal.matches(
+                            transition.type_
                         )
-                        and transition.type_.get[InternalNonterminalType]()
+                        and TransitionTypeVariant.Nonterminal[transition.type_]
                         == automaton.type_
                     ):
                         for i, opt_p in enumerate(
@@ -1167,7 +1175,7 @@ fn create_left_recursion_plans[
                                 next_dfa=p.next_dfa(),
                                 type_=t,
                                 debug_text=p.debug_text,
-                                mode=PlanMode.LeftRecursive,
+                                mode=PlanModeVariant.LeftRecursive.new(),
                             )
 
     return plans^
@@ -1180,7 +1188,7 @@ fn nest_plan[
     plan: Plan[dfa_origin],
     new_node_id: InternalNonterminalType,
     next_dfa: Pointer[DFAState[dfa_origin], next_origin],
-    mode: StackMode[dfa_origin],
+    var mode: StackMode[dfa_origin],
 ) -> Plan[dfa_origin, next_origin]:
     var pushes = plan.pushes.copy()
     pushes.insert(
@@ -1188,7 +1196,7 @@ fn nest_plan[
         Push[dfa_origin](
             node_type=new_node_id,
             next_dfa=plan.next_dfa(),
-            stack_mode=mode,
+            stack_mode=mode^,
         ),
     )
     return Plan(
@@ -1196,7 +1204,7 @@ fn nest_plan[
         next_dfa=next_dfa[],
         type_=plan.type_,
         debug_text=plan.debug_text,
-        mode=PlanMode.LL,
+        mode=PlanModeVariant.LL.new(),
     )
 
 
@@ -1216,11 +1224,11 @@ fn calculate_peek_dfa[
 
     var terminals = List[InternalSquashedType]()
     for transition in dfa.transitions:
-        if transition.type_.matches(TransitionTypeVariant.Terminal):
-            var type_ = transition.type_.get[InternalTerminalType]()
+        if TransitionTypeVariant.Terminal.matches(transition.type_):
+            ref type_, _ = TransitionTypeVariant.Terminal[transition.type_]
             terminals.append(type_.to_squashed())
-        elif transition.type_.matches(TransitionTypeVariant.Keyword):
-            var keyword = transition.type_.get[StaticString]()
+        elif TransitionTypeVariant.Keyword.matches(transition.type_):
+            var keyword = TransitionTypeVariant.Keyword[transition.type_]
             terminals.append(keywords.squashed(keyword).value())
         else:
             abort("Only terminals lookaheads are allowed")
@@ -1242,12 +1250,12 @@ fn search_lookahead_end[
         ref [o]dfa_state: DFAState[dfa_origin],
     ) -> ref [o] DFAState[dfa_origin]:
         for transition in dfa_state.transitions:
-            if transition.type_.matches(TransitionTypeVariant.LookaheadEnd):
+            if TransitionTypeVariant.LookaheadEnd.matches(transition.type_):
                 return transition.next_dfa()
-            elif transition.type_.matches(
-                TransitionTypeVariant.PositiveLookaheadStart
-            ) or transition.type_.matches(
-                TransitionTypeVariant.NegativeLookaheadStart
+            elif TransitionTypeVariant.PositiveLookaheadStart.matches(
+                transition.type_
+            ) or TransitionTypeVariant.NegativeLookaheadStart.matches(
+                transition.type_
             ):
                 abort("Unimplemented lookahead end search")
             else:

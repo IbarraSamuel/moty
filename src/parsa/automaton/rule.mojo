@@ -1,97 +1,144 @@
-# from collections import Set
-from sys.intrinsics import _type_is_eq
-from os import abort
+alias lit[l: IntLiteral] = __type_of(l).value
 
 
 @fieldwise_init
 @register_passable("trivial")
-struct RuleVariant(EqualityComparable):
-    alias Invalid = -1
+struct RuleVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]](
+    EqualityComparable
+):
+    alias Invalid = RuleVariant[]()
 
-    alias Identifier = Self(0)
-    alias Keyword = Self(1)
-    alias Or = Self(2)
-    alias Cut = Self(3)
-    alias Maybe = Self(4)
-    alias Multiple = Self(5)
-    alias NegativeLookahead = Self(6)
-    alias PositiveLookahead = Self(7)
-    alias Next = Self(8)
-    alias NodeMayBeOmmited = Self(9)
-    alias DoesErrorRecovery = Self(10)
-    var _v: Int
+    alias Identifier = RuleVariant[lit[0]]()
+    alias Keyword = RuleVariant[lit[1]]()
+    alias Or = RuleVariant[lit[2]]()
+    alias Cut = RuleVariant[lit[3]]()
+    alias Maybe = RuleVariant[lit[4]]()
+    alias Multiple = RuleVariant[lit[5]]()
+    alias NegativeLookahead = RuleVariant[lit[6]]()
+    alias PositiveLookahead = RuleVariant[lit[7]]()
+    alias Next = RuleVariant[lit[8]]()
+    alias NodeMayBeOmmited = RuleVariant[lit[9]]()
+    alias DoesErrorRecovery = RuleVariant[lit[10]]()
+    alias value = IntLiteral[_v]()
 
-    @always_inline("nodebug")
+    @always_inline("builtin")
     fn __eq__(self, other: Self) -> Bool:
-        return self._v == other._v
+        return True
 
-    fn __call__(
-        var self,
-        *,
-        r1: UnsafePointer[Rule] = {},
-        r2: UnsafePointer[Rule] = {},
-        s: StaticString = {},
+    @always_inline("builtin")
+    fn __eq__(self, other: RuleVariant) -> Bool:
+        return False
+
+    fn matches(self, other: Rule) -> Bool:
+        return self.value == other.variant
+
+    fn new(var self: __type_of(Self.Identifier), string: StaticString) -> Rule:
+        return Rule(self.value, {{}, {}, string})
+
+    fn new(var self: __type_of(Self.Keyword), string: StaticString) -> Rule:
+        return Rule(self.value, {{}, {}, string})
+
+    fn new(
+        var self: __type_of(Self.Or),
+        r1: Rule,
+        r2: Rule,
     ) -> Rule:
-        if not (
-            (self == Self.Identifier and s != {})
-            or (self == Self.Keyword and s != {})
-            or (self == Self.Or and r1 != {} and r2 != {})
-            or (self == Self.Cut and r1 != {} and r2 != {})
-            or (self == Self.Maybe and r1 != {})
-            or (self == Self.Multiple and r1 != {})
-            or (self == Self.NegativeLookahead and r1 != {})
-            or (self == Self.PositiveLookahead and r1 != {})
-            or (self == Self.Next and r1 != {} and r2 != {})
-            or (self == Self.NodeMayBeOmmited and r1 != {})
-            or (self == Self.DoesErrorRecovery and r1 != {})
-        ):
-            abort("Error on Rule creation.")
+        return Rule(
+            self.value, {UnsafePointer(to=r1), UnsafePointer(to=r2), {}}
+        )
 
-        return Rule(self, (r1, r2, s))
+    fn new(
+        var self: __type_of(Self.Cut),
+        r1: Rule,
+        r2: Rule,
+    ) -> Rule:
+        return Rule(
+            self.value, {UnsafePointer(to=r1), UnsafePointer(to=r2), {}}
+        )
+
+    fn new(var self: __type_of(Self.Next), r1: Rule, r2: Rule) -> Rule:
+        return Rule(
+            self.value, {UnsafePointer(to=r1), UnsafePointer(to=r2), {}}
+        )
+
+    fn new(var self: __type_of(Self.Maybe), r1: Rule) -> Rule:
+        return Rule(self.value, {UnsafePointer(to=r1), {}, {}})
+
+    fn new(var self: __type_of(Self.Multiple), r1: Rule) -> Rule:
+        return Rule(self.value, {UnsafePointer(to=r1), {}, {}})
+
+    fn new(var self: __type_of(Self.NegativeLookahead), r1: Rule) -> Rule:
+        return Rule(self.value, {UnsafePointer(to=r1), {}, {}})
+
+    fn new(var self: __type_of(Self.PositiveLookahead), r1: Rule) -> Rule:
+        return Rule(self.value, {UnsafePointer(to=r1), {}, {}})
+
+    fn new(var self: __type_of(Self.NodeMayBeOmmited), r1: Rule) -> Rule:
+        return Rule(self.value, {UnsafePointer(to=r1), {}, {}})
+
+    fn new(var self: __type_of(Self.DoesErrorRecovery), r1: Rule) -> Rule:
+        return Rule(self.value, {UnsafePointer(to=r1), {}, {}})
+
+    fn __getitem__(
+        var self: __type_of(Self.Identifier), rule: Rule
+    ) -> StaticString:
+        return rule.inner[2]
+
+    fn __getitem__(
+        var self: __type_of(Self.Keyword), rule: Rule
+    ) -> StaticString:
+        return rule.inner[2]
+
+    fn __getitem__(
+        var self: __type_of(Self.Or), rule: Rule
+    ) -> Tuple[UnsafePointer[Rule], UnsafePointer[Rule]]:
+        return (rule.inner[0], rule.inner[1])
+
+    fn __getitem__(
+        var self: __type_of(Self.Cut), rule: Rule
+    ) -> Tuple[UnsafePointer[Rule], UnsafePointer[Rule]]:
+        return (rule.inner[0], rule.inner[1])
+
+    fn __getitem__(
+        var self: __type_of(Self.Next), rule: Rule
+    ) -> Tuple[UnsafePointer[Rule], UnsafePointer[Rule]]:
+        return (rule.inner[0], rule.inner[1])
+
+    fn __getitem__(
+        var self: __type_of(Self.Maybe), rule: Rule
+    ) -> ref [rule.inner[0].origin] Rule:
+        return rule.inner[0][]
+
+    fn __getitem__(
+        var self: __type_of(Self.Multiple), rule: Rule
+    ) -> ref [rule.inner[0].origin] Rule:
+        return rule.inner[0][]
+
+    fn __getitem__(
+        var self: __type_of(Self.NegativeLookahead), rule: Rule
+    ) -> ref [rule.inner[0].origin] Rule:
+        return rule.inner[0][]
+
+    fn __getitem__(
+        var self: __type_of(Self.PositiveLookahead), rule: Rule
+    ) -> ref [rule.inner[0].origin] Rule:
+        return rule.inner[0][]
+
+    fn __getitem__(
+        var self: __type_of(Self.NodeMayBeOmmited), rule: Rule
+    ) -> ref [rule.inner[0].origin] Rule:
+        return rule.inner[0][]
+
+    fn __getitem__(
+        var self: __type_of(Self.DoesErrorRecovery), rule: Rule
+    ) -> ref [rule.inner[0].origin] Rule:
+        return rule.inner[0][]
 
 
 @fieldwise_init
 struct Rule(Copyable, Movable, Writable):
-    var variant: RuleVariant
-    var _content: (UnsafePointer[Rule], UnsafePointer[Rule], StaticString)
+    var variant: Int
+    var inner: (UnsafePointer[Rule], UnsafePointer[Rule], StaticString)
 
     fn write_to(self, mut w: Some[Writer]):
-        w.write("Rule(categ:", self.variant._v, ")")
-
-    # @implicit
-    # fn __init__(out self, variant: RuleVariant = RuleVariant.Invalid):
-    #     self._content = ({}, {}, {})
-    #     self.variant = variant
-
-    @always_inline("nodebug")
-    fn matches(self, other: RuleVariant) -> Bool:
-        return self.variant == other
-
-    fn get[t: Copyable](self) -> t:
-        if (
-            self.matches(RuleVariant.Identifier)
-            or self.matches(RuleVariant.Keyword)
-        ) and _type_is_eq[t, StaticString]():
-            return rebind[t](self._content[2]).copy()
-
-        if (
-            self.matches(RuleVariant.Or)
-            or self.matches(RuleVariant.Cut)
-            or self.matches(RuleVariant.Next)
-        ) and _type_is_eq[t, Tuple[Rule, Rule]]():
-            return rebind[t]((self._content[0], self._content[1])).copy()
-
-        if (
-            self.matches(RuleVariant.Maybe)
-            or self.matches(RuleVariant.Multiple)
-            or self.matches(RuleVariant.NegativeLookahead)
-            or self.matches(RuleVariant.PositiveLookahead)
-            or self.matches(RuleVariant.NodeMayBeOmmited)
-            or self.matches(RuleVariant.DoesErrorRecovery)
-        ) and _type_is_eq[t, Rule]():
-            return rebind[t](self._content[0]).copy()
-
-        abort("Failed to get value, due to type specified in the getter.")
-
-        # NOTE: This never runs
-        return rebind[t](self._content).copy()
+        w.write("Rule(categ:", self.variant, ")")

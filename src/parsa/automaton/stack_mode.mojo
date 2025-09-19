@@ -23,7 +23,7 @@ struct StackModeVariant[
     fn matches(self, stack_mode: StackMode) -> Bool:
         return self.value == stack_mode.variant
 
-    fn __call__[
+    fn new[
         dfa_origin: ImmutableOrigin
     ](
         var self: __type_of(Self.Alternative),
@@ -31,10 +31,12 @@ struct StackModeVariant[
     ) -> StackMode[dfa_origin]:
         return {self.value, Pointer(to=plan)}
 
-    fn __call__(var self: __type_of(Self.LL)) -> StackMode[ImmutableAnyOrigin]:
+    fn new[
+        dfa_origin: ImmutableOrigin
+    ](var self: __type_of(Self.LL)) -> StackMode[dfa_origin]:
         return {self.value, None}
 
-    fn get(
+    fn __getitem__(
         var self: __type_of(Self.Alternative), ref stack_mode: StackMode
     ) -> ref [stack_mode.inner._value] Pointer[
         Plan[stack_mode.dfa_origin], ImmutableAnyOrigin

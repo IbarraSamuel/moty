@@ -79,7 +79,7 @@ struct CompressedNode:
 struct Grammar[T: AnyType]:
     var terminal_map: Pointer[InternalStrToToken, StaticConstantOrigin]
     var nonterminal_map: Pointer[InternalStrToNode, StaticConstantOrigin]
-    var automatons: Automatons
+    var automatons: Automatons[StaticConstantOrigin]
     var keywords: Keywords
     var soft_keywords: SoftKeywords
 
@@ -117,14 +117,14 @@ struct BacktrackingPoint[fallback: ImmutableOrigin](Copyable, Movable):
     var tree_node_count: UInt
     var token_index: UInt
     var children_count: UInt
-    var fallback_plan: Pointer[Plan, fallback]
+    var fallback_plan: Pointer[Plan[fallback], fallback]
 
 
 struct StackNode[dfa_origin: ImmutableOrigin](Copyable, Movable):
     var node_id: InternalNonterminalType
     var tree_node_index: UInt
     var latest_child_node_index: UInt
-    var dfa_state: Pointer[DFAState, dfa_origin]
+    var dfa_state: Pointer[DFAState[dfa_origin], dfa_origin]
     var children_count: UInt
 
     var mode: ModeData[dfa_origin]
