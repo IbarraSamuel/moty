@@ -11,6 +11,7 @@ from parsa.automaton.rule import Rule, RuleVariant
 from parsa.automaton.plan_mode import PlanMode
 from parsa.automaton.first_plan import FirstPlan, FirstPlanVariant
 from parsa.automaton.stack_mode import StackMode, StackModeVariant
+
 alias NODE_START: UInt16 = 1 << 15
 alias ERROR_RECOVERY_BIT: UInt16 = 1 << 14
 
@@ -202,7 +203,6 @@ struct DFATransition[dfa_origin: ImmutableOrigin](Copyable, Movable):
         return self.to[]
 
 
-
 struct Push[dfa_origin: ImmutableOrigin](
     Copyable, EqualityComparable, Movable, Representable, Writable
 ):
@@ -226,11 +226,11 @@ struct Push[dfa_origin: ImmutableOrigin](
         out self,
         node_type: InternalNonterminalType,
         ref [dfa_origin]next_dfa: DFAState[dfa_origin],
-        stack_mode: StackMode[dfa_origin],
+        var stack_mode: StackMode[dfa_origin],
     ):
         self.node_type = node_type
         self._next_dfa = Pointer(to=next_dfa)
-        self.stack_mode = stack_mode
+        self.stack_mode = stack_mode^
 
     fn __eq__(self, other: Self) -> Bool:
         return (
@@ -942,7 +942,7 @@ fn plans_for_dfa[
                                 it.value,  # this is nested_plan, but I removed to get rid of a warning
                                 node_id,
                                 transition.to,
-                                StackMode[dfa_origin].LL,
+                                StackModeVariant.LL(),
                             )
 
                         add_if_no_conflict[dfa_origin, create_plan](

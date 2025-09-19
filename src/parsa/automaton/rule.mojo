@@ -51,7 +51,7 @@ struct RuleVariant(EqualityComparable):
 
 
 @fieldwise_init
-struct Rule(ImplicitlyCopyable, Movable, Writable):
+struct Rule(Copyable, Movable, Writable):
     var variant: RuleVariant
     var _content: (UnsafePointer[Rule], UnsafePointer[Rule], StaticString)
 
