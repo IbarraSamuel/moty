@@ -687,22 +687,27 @@ struct RuleAutomaton[dfa_origin: ImmutableOrigin](Copyable, Movable):
     # illustrate_dfa
 
 
-fn generate_automatons[
-    dfa_origin: ImmutableOrigin = StaticConstantOrigin
-](
+fn generate_automatons(
     nonterminal_map: Dict[StaticString, InternalNonterminalType],
     terminal_map: Dict[StaticString, InternalTerminalType],
     rules: Dict[InternalNonterminalType, (StaticString, Rule)],
     soft_keywords: Dict[InternalTerminalType, Set[StaticString]],
-) -> (Dict[InternalNonterminalType, RuleAutomaton[dfa_origin]], Keywords):
+) -> (
+    Dict[InternalNonterminalType, RuleAutomaton[ImmutableOrigin.empty]],
+    Keywords,
+):
     var keywords = Keywords(counter=len(terminal_map), keywords={})
-    var automatons = Dict[InternalNonterminalType, RuleAutomaton[dfa_origin]]()
+    var automatons = Dict[
+        InternalNonterminalType, RuleAutomaton[ImmutableOrigin.empty]
+    ]()
+
+    alias origin = automatons.V.dfa_origin
 
     for it in rules.items():
         ref internal_type = it.key
         ref rule_name, rule = it.value
 
-        var automaton = RuleAutomaton[dfa_origin](
+        var automaton = RuleAutomaton[origin](
             type_=internal_type,
             name=rule_name,
             nfa_states={},
@@ -724,7 +729,7 @@ fn generate_automatons[
 
     var terminal_count = keywords.counter
 
-    var first_plans = Dict[InternalNonterminalType, FirstPlan[dfa_origin]]()
+    var first_plans = Dict[InternalNonterminalType, FirstPlan[origin]]()
 
     for ref it in automatons.items():
         ref rule_label = it.key
@@ -753,9 +758,7 @@ fn generate_automatons[
                 ref plans, _ = FirstPlanVariant.Calculated[rl]
                 automaton.dfa_states[
                     0
-                ].transition_to_plan = FastLookupTransitions[
-                    dfa_origin
-                ].from_plans(
+                ].transition_to_plan = FastLookupTransitions.from_plans(
                     terminal_count, plans
                 )
             else:
@@ -777,19 +780,21 @@ fn generate_automatons[
                 DFAStateId(i),
                 False,
             )
-            automaton.dfa_states[i].transition_to_plan = FastLookupTransitions[
-                dfa_origin
-            ].from_plans(terminal_count, plans)
+            automaton.dfa_states[
+                i
+            ].transition_to_plan = FastLookupTransitions.from_plans(
+                terminal_count, plans
+            )
 
         for i in range(1, len(automaton.dfa_states)):
-            var left_recursion_plans = create_left_recursion_plans[dfa_origin](
+            var left_recursion_plans = create_left_recursion_plans(
                 automatons, rule_label, DFAStateId(i), first_plans
             )
             ref dfa = automaton.dfa_states[i]
             if len(dfa.transition_to_plan.inner) == 0:
-                dfa.transition_to_plan = FastLookupTransitions[
-                    dfa_origin
-                ].from_plans(terminal_count, left_recursion_plans)
+                dfa.transition_to_plan = FastLookupTransitions.from_plans(
+                    terminal_count, left_recursion_plans
+                )
             else:
                 dfa.transition_to_plan.extend(left_recursion_plans)
 

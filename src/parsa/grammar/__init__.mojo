@@ -60,6 +60,7 @@ struct InternalTree[code_origin: ImmutableOrigin]:
         self.nodes = nodes^
 
 
+@fieldwise_init
 struct InternalNode(Copyable, Movable):
     var next_node_offset: NodeIndex
     var type_: InternalSquashedType
@@ -78,10 +79,11 @@ struct CompressedNode:
     var length: UInt16
 
 
+@fieldwise_init
 struct Grammar[T: AnyType]:
     var terminal_map: Pointer[InternalStrToToken, StaticConstantOrigin]
     var nonterminal_map: Pointer[InternalStrToNode, StaticConstantOrigin]
-    var automatons: Automatons[StaticConstantOrigin]
+    var automatons: Automatons[ImmutableOrigin.empty]
     var keywords: Keywords
     var soft_keywords: SoftKeywords
 
@@ -97,11 +99,21 @@ struct Grammar[T: AnyType]:
         ref automatons, keywords = generate_automatons(
             nonterminal_map, terminal_map, rules, soft_keywords
         )
-        self.terminal_map = Pointer(to=terminal_map)
-        self.nonterminal_map = Pointer(to=nonterminal_map)
-        self.automatons = automatons.copy()
-        self.keywords = keywords.copy()
-        self.soft_keywords = soft_keywords^
+        return {
+            Pointer(to=terminal_map),
+            Pointer(to=nonterminal_map),
+            automatons.copy(),
+            keywords.copy(),
+            soft_keywords^,
+        }
+
+    fn parse[
+        I: Iterator
+    ](
+        self, code: StringSlice, tokens: I, start: InternalNonterminalType
+    ) -> List[InternalNode]:
+        ...
+        return {}
 
 
 struct BacktrackingPoint[fallback: ImmutableOrigin](Copyable, Movable):
@@ -109,6 +121,18 @@ struct BacktrackingPoint[fallback: ImmutableOrigin](Copyable, Movable):
     var token_index: UInt
     var children_count: UInt
     var fallback_plan: Pointer[Plan[fallback], fallback]
+
+    fn __init__(
+        out self,
+        tree_node_count: UInt,
+        token_index: UInt,
+        children_count: UInt,
+        ref [fallback]fallback_plan: Plan[fallback],
+    ):
+        self.tree_node_count = tree_node_count
+        self.token_index = token_index
+        self.children_count = children_count
+        self.fallback_plan = Pointer(to=fallback_plan)
 
 
 struct StackNode[dfa_origin: ImmutableOrigin](Copyable, Movable):
@@ -120,6 +144,24 @@ struct StackNode[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
     var mode: ModeData[dfa_origin]
     var enabled_token_recording: Bool
+
+    fn __init__(
+        out self,
+        node_id: InternalNonterminalType,
+        tree_node_index: UInt,
+        latest_child_node_index: UInt,
+        ref [dfa_origin]dfa_state: DFAState[dfa_origin],
+        children_count: UInt,
+        var mode: ModeData[dfa_origin],
+        enabled_token_recording: Bool,
+    ):
+        self.node_id = node_id
+        self.tree_node_index = tree_node_index
+        self.latest_child_node_index = latest_child_node_index
+        self.dfa_state = Pointer(to=dfa_state)
+        self.children_count = children_count
+        self.mode = mode^
+        self.enabled_token_recording = enabled_token_recording
 
     fn write_to(self, mut writer: Some[Writer]):
         writer.write(
@@ -145,7 +187,7 @@ struct StackNode[dfa_origin: ImmutableOrigin](Copyable, Movable):
 
     @always_inline
     fn can_omit_children(self) -> Bool:
-        return self.dfa_state.node_may_be_ommited and self.children_count == 1
+        return self.dfa_state[].node_may_be_omitted and self.children_count == 1
 
 
 struct Stack[node_origin: ImmutableOrigin](Sized):
@@ -155,12 +197,20 @@ struct Stack[node_origin: ImmutableOrigin](Sized):
     fn __init__(
         out self,
         var node_id: InternalNonterminalType,
-        ref [node_origin]dfa_state: DFAState,
+        ref [node_origin]dfa_state: DFAState[node_origin],
         string_len: Int,
     ):
-        self.stack_nodes = List[StackMode[node_origin]](capacity=128)
-        self.tree_nodes = List[InternalNode](capacity=string_len / 4)
-        self.push(node_id, 0, dfa_state, 0, ModeDataVariant.LL.new(), 0, False)
+        self.stack_nodes = {capacity = 128}
+        self.tree_nodes = {capacity = string_len // 4}
+        self.push(
+            node_id,
+            0,
+            dfa_state,
+            0,
+            ModeDataVariant.LL.new[node_origin](),
+            0,
+            False,
+        )
 
     @always_inline
     fn tos(self) -> ref [self.stack_nodes[0]] StackNode[node_origin]:
@@ -172,53 +222,53 @@ struct Stack[node_origin: ImmutableOrigin](Sized):
 
     @always_inline
     fn __len__(self) -> Int:
-        len(self.stack_nodes)
+        return len(self.stack_nodes)
 
     @always_inline
     fn pop_normal(mut self):
-        ref stack_mode = self.stack_nodes.pop()
+        ref stack_node = self.stack_nodes.pop()
         if stack_node.can_omit_children():
-            self.tree_nodes.remove(stack_node.tree_node_index)
+            _ = self.tree_nodes.pop(stack_node.tree_node_index)
         else:
             debug_assert(stack_node.children_count >= 1)
-            update_tree_node_position(self.tree_nodes, stack_mode)
+            update_tree_node_position(self.tree_nodes, stack_node)
 
     @always_inline
     fn push(
         mut self,
         node_id: InternalNonterminalType,
         tree_node_index: Int,
-        ref [node_origin]dfa_state: DFAState,
+        ref [node_origin]dfa_state: DFAState[node_origin],
         start: CodeIndex,
-        node: ModeData[node_origin],
+        var mode: ModeData[node_origin],
         children_count: Int,
         enabled_token_recording: Bool,
     ):
-        self.stack_nodes.push(
+        if ModeDataVariant.LL.matches(mode):
+            self.tree_nodes.append(
+                InternalNode(0, node_id.to_squashed(), start, 0)
+            )
+
+        self.stack_nodes.append(
             StackNode(
                 node_id,
                 tree_node_index,
                 0,
                 dfa_state,
                 children_count,
-                mode,
+                mode^,
                 enabled_token_recording,
             )
         )
 
-        if ModeDataVariant.LL.matches(mode):
-            self.tree_nodes.pushes(
-                InternalNode(0, node_id.to_squashed(), start, 0)
-            )
-
     @always_inline
     fn calculate_previous_next_node(mut self):
         ref tos = self.stack_nodes.unsafe_get(len(self) - 1)
-        var index = tos.latest_children_node_index
+        var index = tos.latest_child_node_index
 
         var next = len(self.tree_nodes)
 
-        if index != 0 and index in self.tree_nodes:
+        if index != 0 and index < len(self.tree_nodes):
             self.tree_nodes.unsafe_get(index).next_node_offset = next - index
 
         tos.latest_child_node_index = next
@@ -229,13 +279,13 @@ struct Stack[node_origin: ImmutableOrigin](Sized):
         terminal_map: InternalStrToToken,
     ) -> String:
         # TODO
-        ...
+        return {}
 
 
 @always_inline
 fn update_tree_node_position(
     mut tree_nodes: List[InternalNode], stack_node: StackNode
 ):
-    var last_tree_node = tree_nodes[-1]
-    var n = tree_nodes[stack_node.tree_node_index]
+    ref last_tree_node = tree_nodes[-1]
+    ref n = tree_nodes[stack_node.tree_node_index]
     n.length = last_tree_node.end_index() - n.start_index
