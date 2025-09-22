@@ -112,8 +112,10 @@ struct Grammar[T: AnyType]:
     ](
         self, code: StringSlice, tokens: I, start: InternalNonterminalType
     ) -> List[InternalNode]:
-        ...
-        return {}
+        _, _, idx = self.automatons._find_index(hash(start), start)
+        ref automaton_rule = self.automatons._entries[idx].value().value
+
+        var stack = Stack(start, automaton_rule.dfa_states[0], len(code))
 
 
 struct BacktrackingPoint[fallback: ImmutableOrigin](Copyable, Movable):
