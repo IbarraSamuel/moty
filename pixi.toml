@@ -1,8 +1,8 @@
 [project]
 authors = ["Samuel Ibarra <ing.samuelibarra@gmail.com>"]
 channels = [
-    "https://repo.prefix.dev/conda-forge",
-    "https://conda.modular.com/max-nightly",
+    "https://prefix.dev/max-nightly",
+    "https://prefix.dev/conda-forge",
 ]
 description = "Python static type checker written in Mojo."
 name = "moty"
