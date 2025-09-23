@@ -14,12 +14,14 @@ from parsa.automaton import (
     SoftKeywords,
     Squashable,
     StackMode,
+    StackModeVariant,
     generate_automatons,
 )
 
 from parsa.grammar.mode_data import ModeData, ModeDataVariant
 from parsa.backtracking import BacktrackingTokenizer
 
+from os import abort
 # from utils import Variant
 
 # Backtracking??
@@ -85,7 +87,7 @@ struct CompressedNode:
 struct Grammar[T: AnyType]:
     var terminal_map: Pointer[InternalStrToToken, StaticConstantOrigin]
     var nonterminal_map: Pointer[InternalStrToNode, StaticConstantOrigin]
-    var automatons: Automatons[ImmutableOrigin.empty]
+    var automatons: Automatons
     var keywords: Keywords
     var soft_keywords: SoftKeywords
 
@@ -143,14 +145,14 @@ struct Grammar[T: AnyType]:
             else:
                 self.error_recovery(stack, backtracking_tokenizer, None, None)
 
+        return stack^.take_tree_nodes()
+
     @always_inline
     fn apply_transition[
-        I: Tokenizer,
-        dfa_origin: ImmutableOrigin,
-        node_origin: ImmutableOrigin,
+        I: Tokenizer, dfa_state_o: ImmutableOrigin, fallback_plan_o: ImmutableOrigin
     ](
         self,
-        mut stack: Stack[dfa_origin, node_origin],
+        mut stack: Stack[dfa_state_o, fallback_plan_o],
         mut backtracking_tokenizer: BacktrackingTokenizer[I],
         transition: InternalSquashedType,
         token: I.Element,
@@ -175,19 +177,21 @@ struct Grammar[T: AnyType]:
                 ref plan = lkp.value()
                 if PlanModeVariant.PositivePeek.matches(plan.mode):
                     ref tos_mut = stack.tos_mut()
-                    tos_mut.dfa_state = Pointer(to=plan.next_dfa())
+                    tos_mut.dfa_state = Pointer[origin=stack.dfa_state_o](to=plan.next_dfa())
                 else:
                     self.apply_plan(stack, plan, token, backtracking_tokenizer)
                     break
 
     @always_inline
     fn end_of_node[
-        mode_origin: ImmutableOrigin, I: Tokenizer
+        dfa_state_o: ImmutableOrigin,
+        fallback_plan_o: ImmutableOrigin,
+        I: Tokenizer,
     ](
         self,
-        mut stack: Stack,
-        ref backtracking_tokenizer: BacktrackingTokenizer[I],
-        mode: ModeData[mode_origin],
+        mut stack: Stack[dfa_state_o, fallback_plan_o],
+        mut backtracking_tokenizer: BacktrackingTokenizer[I],
+        mode: ModeData[fallback_plan_o],
     ):
         if ModeDataVariant.LL.matches(mode):
             stack.pop_normal()
@@ -198,7 +202,7 @@ struct Grammar[T: AnyType]:
             tos.latest_child_node_index = old_tos.latest_child_node_index
             if not tos.enabled_token_recording:
                 backtracking_tokenizer.stop()
-            debug_assert(tos.dfa_state.is_final)
+            debug_assert(tos.dfa_state[].is_final)
 
     fn error_recovery[
         I: Tokenizer
@@ -209,17 +213,25 @@ struct Grammar[T: AnyType]:
         transition: Optional[InternalSquashedType],
         token: Optional[I.Element],
     ):
-        for i, node in reverse(enumerate(stack.stack_nodes)):
+        for i, node in enumerate(stack.stack_nodes):  # TODO: REVERSE
             if ModeDataVariant.Alternative.matches(node.mode):
-                stack.stack_nodes.truncate(i)
-                stack.tree_nodes.truncate(backtracking_point.tree_node_count)
+                ref backtracking_point = ModeDataVariant.Alternative[node.mode]
+
+                fn truncate(mut lst: List, i: Int):
+                    # TODO: Verify if its' fine
+                    for _ in range(len(lst) - i):
+                        _ = lst.pop()
+
+                truncate(stack.stack_nodes, i)
+                truncate(stack.tree_nodes, backtracking_point.tree_node_count)
+
                 ref tos = stack.tos_mut()
                 tos.children_count = backtracking_point.children_count
                 backtracking_tokenizer.reset(backtracking_point.token_index)
                 ref t = backtracking_tokenizer.__next__()
                 self.apply_plan(
                     stack,
-                    backtracking_point.fallback_plan,
+                    backtracking_point.fallback_plan[],
                     t,
                     backtracking_tokenizer,
                 )
@@ -230,11 +242,16 @@ struct Grammar[T: AnyType]:
                 return
 
         if transition:
-            ref tansition_ref = transition.value()
-            for (
-                nonterminal_id
-            ) in stack.tos().dfa_state.nonterminal_transition_ids():
-                ref automaton = self.automatons[nonterminal_id]
+            ref transition_ref = transition.value()
+            for nonterminal_id in (
+                stack.tos().dfa_state[].nonterminal_transition_ids()
+            ):
+                # Unsafe get
+                _, _, nont_idx = self.automatons._find_index(
+                    hash(nonterminal_id), nonterminal_id
+                )
+                ref automaton = self.automatons._entries[nont_idx].value().value
+
                 if automaton.does_error_recovery:
                     stack.calculate_previous_next_node()
                     ref token_ref = token.value()
@@ -242,26 +259,34 @@ struct Grammar[T: AnyType]:
                         InternalNode(
                             next_node_offset=0,
                             type_=nonterminal_id.to_squashed().set_error_recovery_bit(),
-                            start_index=token.start_index(),
-                            length=token.length(),
+                            start_index=token_ref.start_index(),
+                            length=token_ref.length(),
                         )
                     )
-                    stack.tree_nodes.push(
+                    stack.tree_nodes.append(
                         InternalNode(
                             next_node_offset=0,
-                            type_=transition.set_error_recovery_bit(),
-                            start_index=token.start_index(),
-                            length=token.length(),
+                            type_=transition_ref.set_error_recovery_bit(),
+                            start_index=token_ref.start_index(),
+                            length=token_ref.length(),
                         )
                     )
                     return
 
-        for i, node in reverse(enumerate(stack.stack_nodes)):
-            if self.automatons[node.node_id].does_error_recovery:
-                while stack.stack_nodes.len() > i:
+        for i, node in enumerate(stack.stack_nodes):
+            _, _, nid_idx = self.automatons._find_index(
+                hash(node.node_id), node.node_id
+            )
+            ref automaton =                 self.automatons._entries[nid_idx]
+                .value()
+                .value
+            if (
+                automaton.does_error_recovery
+            ):
+                while len(stack.stack_nodes) > i:
                     var stack_node = stack.stack_nodes.pop()
                     update_tree_node_position(stack.tree_nodes, stack_node)
-                    ref n = stack.tree_nodes.get_mut(stack_node.tree_node_index)
+                    ref n = stack.tree_nodes[stack_node.tree_node_index]
                     n.type_ = n.type_.set_error_recovery_bit()
 
                 if transition:
@@ -274,44 +299,86 @@ struct Grammar[T: AnyType]:
 
                 return
 
-        @parameter
-        fn mapper(i: T) -> O:
-            return a.dfa_state.from_rule
+        fn mapper(var n: StackNode[stack.dfa_state_o, stack.fallback_plan_o]) -> StaticString:
+            return n.dfa_state[].from_rule
 
-        var nodes = map[mapper](stack.stack_nodes).__str__()
-        os.abort(
+        ref nodes = "".join([v for v in map[mapper](stack.stack_nodes)])
+        var token_repr: String
+        if token:
+            token_repr = String("Some(", token.value(), ")")
+        else:
+            token_repr = "None"
+
+        abort(
             String(
                 "No error recovery function found with stack ",
                 nodes,
                 " and token: ",
-                token,
+                token_repr
             )
         )
 
     @always_inline
     fn apply_plan[
-        I: Tokenizer, stack_origin: ImmutableOrigin
-    ](
+        I: Tokenizer](
         self,
-        mut stack: Stack[stack_origin],
-        plan: Plan[plan_origin],
+        mut stack: Stack,
+        ref plan: Plan,
+        token: I.Element,
         mut backtracking_tokenizer: BacktrackingTokenizer[I],
     ):
-        pass
+        ref tos_mut = stack.stack_nodes[-1]
+        tos_mut.dfa_state = Pointer[origin=stack.dfa_state_o](to=plan.next_dfa())
+
+        var start_index = token.start_index()
+
+        if PlanModeVariant.LeftRecursive.matches(plan.mode) and not tos_mut.can_omit_children():
+            tos_mut.children_count = 1
+            tos_mut.latest_child_node_index = tos_mut.tree_node_index + 1
+            tos_mut.mode = ModeDataVariant.LL.new[stack.fallback_plan_o]()
+
+            update_tree_node_position(stack.tree_nodes, tos_mut)
+
+            ref old_node = stack.tree_nodes[tos_mut.tree_node_index]
+            stack.tree_nodes.insert(tos_mut.tree_node_index, InternalNode(next_node_offset=0, type_=old_node.type_, start_index=old_node.start_index, length=0))
+
+        var enabled_token_recording = tos_mut.enabled_token_recording
+        stack.calculate_previous_next_node()
+
+        for push in plan.pushes:
+            ref tos = stack.tos_mut()
+            var children_count = tos.children_count
+            tos.children_count += 1
+
+            if StackModeVariant.LL.matches(push.stack_mode):
+                stack.push(push.node_type, len(stack.tree_nodes), push.next_dfa(), start_index, ModeDataVariant.LL.new[stack.fallback_plan_o](), 0, enabled_token_recording)
+
+            elif StackModeVariant.Alternative.matches(push.stack_mode):
+                var alternative_plan = StackModeVariant.Alternative[push.stack_mode].origin_cast[stack.fallback_plan_o.mut, stack.fallback_plan_o]()
+                enabled_token_recording = True
+                var backtracking_point = BacktrackingPoint(tree_node_count=len(stack.tree_nodes), token_index=backtracking_tokenizer.start(token), fallback_plan=alternative_plan[], children_count=children_count)
+                stack.push(push.node_type, stack.tos().tree_node_index, push.next_dfa(), start_index, ModeDataVariant.Alternative.new(backtracking_point^), children_count, enabled_token_recording)
+
+            stack.tos_mut().latest_child_node_index = len(stack.tree_nodes)
+
+        stack.tos_mut().children_count += 1
+        stack.tree_nodes.append(InternalNode(next_node_offset=0, type_=plan.type_, start_index=start_index, length=token.length()))
 
 
-struct BacktrackingPoint[fallback: ImmutableOrigin](Copyable, Movable):
+
+
+struct BacktrackingPoint[fallback_plan_o: ImmutableOrigin](Copyable, Movable):
     var tree_node_count: UInt
     var token_index: UInt
     var children_count: UInt
-    var fallback_plan: Pointer[Plan[fallback], fallback]
+    var fallback_plan: Pointer[Plan, fallback_plan_o]
 
     fn __init__(
         out self,
         tree_node_count: UInt,
         token_index: UInt,
         children_count: UInt,
-        ref [fallback]fallback_plan: Plan[fallback],
+        ref [fallback_plan_o]fallback_plan: Plan,
     ):
         self.tree_node_count = tree_node_count
         self.token_index = token_index
@@ -319,16 +386,15 @@ struct BacktrackingPoint[fallback: ImmutableOrigin](Copyable, Movable):
         self.fallback_plan = Pointer(to=fallback_plan)
 
 
-struct StackNode[state_origin: ImmutableOrigin, dfa_origin: ImmutableOrigin](
-    Copyable, Movable
-):
+struct StackNode[dfa_state_o: ImmutableOrigin, fallback_plan_o: ImmutableOrigin
+](Copyable, Movable):
     var node_id: InternalNonterminalType
     var tree_node_index: UInt
     var latest_child_node_index: UInt
-    var dfa_state: Pointer[DFAState[dfa_origin], state_origin]
+    var dfa_state: Pointer[DFAState, dfa_state_o]
     var children_count: UInt
 
-    var mode: ModeData[dfa_origin]
+    var mode: ModeData[fallback_plan_o]
     var enabled_token_recording: Bool
 
     fn __init__(
@@ -336,9 +402,9 @@ struct StackNode[state_origin: ImmutableOrigin, dfa_origin: ImmutableOrigin](
         node_id: InternalNonterminalType,
         tree_node_index: UInt,
         latest_child_node_index: UInt,
-        ref [state_origin]dfa_state: DFAState[dfa_origin],
+        ref [dfa_state_o]dfa_state: DFAState,
         children_count: UInt,
-        var mode: ModeData[dfa_origin],
+        var mode: ModeData[fallback_plan_o],
         enabled_token_recording: Bool,
     ):
         self.node_id = node_id
@@ -376,14 +442,16 @@ struct StackNode[state_origin: ImmutableOrigin, dfa_origin: ImmutableOrigin](
         return self.dfa_state[].node_may_be_omitted and self.children_count == 1
 
 
-struct Stack[dfa_origin: ImmutableOrigin, node_origin: ImmutableOrigin](Sized):
-    var stack_nodes: List[StackNode[dfa_origin, node_origin]]
+struct Stack[dfa_state_o: ImmutableOrigin, fallback_plan_o: ImmutableOrigin](
+    Sized
+):
+    var stack_nodes: List[StackNode[dfa_state_o, fallback_plan_o]]
     var tree_nodes: List[InternalNode]
 
     fn __init__(
-        out self,
+        out self: Stack[dfa_state_o, ImmutableOrigin.empty],
         var node_id: InternalNonterminalType,
-        ref [dfa_origin]dfa_state: DFAState[node_origin],
+        ref [dfa_state_o]dfa_state: DFAState,
         string_len: Int,
     ):
         self.stack_nodes = {capacity = 128}
@@ -393,21 +461,26 @@ struct Stack[dfa_origin: ImmutableOrigin, node_origin: ImmutableOrigin](Sized):
             0,
             dfa_state,
             0,
-            ModeDataVariant.LL.new[node_origin](),
+            ModeDataVariant.LL.new[self.fallback_plan_o](),
             0,
             False,
         )
 
+    # HELPER
+    fn take_tree_nodes(deinit self) -> List[InternalNode]:
+        _ = self.stack_nodes^
+        return self.tree_nodes^
+
     @always_inline
     fn tos(
         self,
-    ) -> ref [self.stack_nodes[0]] StackNode[dfa_origin, node_origin]:
+    ) -> ref [self.stack_nodes[0]] StackNode[dfa_state_o, fallback_plan_o]:
         return self.stack_nodes.unsafe_get(len(self) - 1)
 
     @always_inline
     fn tos_mut(
         mut self,
-    ) -> ref [self.stack_nodes[0]] StackNode[dfa_origin, node_origin]:
+    ) -> ref [self.stack_nodes[0]] StackNode[dfa_state_o, fallback_plan_o]:
         return self.stack_nodes.unsafe_get(len(self) - 1)
 
     @always_inline
@@ -428,9 +501,9 @@ struct Stack[dfa_origin: ImmutableOrigin, node_origin: ImmutableOrigin](Sized):
         mut self,
         node_id: InternalNonterminalType,
         tree_node_index: Int,
-        ref [dfa_origin]dfa_state: DFAState[node_origin],
+        ref [dfa_state_o]dfa_state: DFAState,
         start: CodeIndex,
-        var mode: ModeData[node_origin],
+        var mode: ModeData[fallback_plan_o],
         children_count: Int,
         enabled_token_recording: Bool,
     ):

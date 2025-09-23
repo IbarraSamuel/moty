@@ -254,7 +254,7 @@ struct Push(Copyable, EqualityComparable, Movable, Representable, Writable):
 
 struct Plan(Copyable, EqualityComparable, Movable, Writable):
     var pushes: List[Push]
-    var _next_dfa: UnsafePointer[DFAState]
+    var _next_dfa: UnsafePointer[DFAState, mut=False]
     var type_: InternalSquashedType
     var mode: PlanMode
     var debug_text: StaticString
@@ -1156,7 +1156,7 @@ fn nest_plan(
 
 fn calculate_peek_dfa(
     keywords: Keywords, transition: DFATransition
-) -> (Pointer[DFAState, MutableAnyOrigin], List[InternalSquashedType],):
+) -> (Pointer[DFAState, MutableAnyOrigin], List[InternalSquashedType]):
     ref dfa = transition.next_dfa()
     ref lookahead_end = dfa.transitions[0].next_dfa()
 
@@ -1283,6 +1283,7 @@ fn split_tokens(
             new_dfa_nfa_ids, automaton.nfa_end_id, dfa.list_index
         )
         automaton.construct_powerset_for_dfa(
+            # To erase self mutable reference
             UnsafePointer[origin=MutableAnyOrigin](to=new_dfa)[],
             automaton.nfa_end_id,
         )
