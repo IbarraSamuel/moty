@@ -293,8 +293,7 @@ struct Grammar[T: AnyType]:
         plan: Plan[plan_origin],
         mut backtracking_tokenizer: BacktrackingTokenizer[I],
     ):
-        # TODO:...
-        ...
+        pass
 
 
 struct BacktrackingPoint[fallback: ImmutableOrigin](Copyable, Movable):
