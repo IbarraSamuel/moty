@@ -81,17 +81,26 @@ struct RuleVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]]:
 
     fn __getitem__(
         var self: __type_of(Self.Or), rule: Rule
-    ) -> Tuple[UnsafePointer[Rule], UnsafePointer[Rule]]:
+    ) -> Tuple[
+        UnsafePointer[Rule, mut=False, origin=StaticConstantOrigin],
+        UnsafePointer[Rule, mut=False, origin=StaticConstantOrigin],
+    ]:
         return (rule.inner[0], rule.inner[1])
 
     fn __getitem__(
         var self: __type_of(Self.Cut), rule: Rule
-    ) -> Tuple[UnsafePointer[Rule], UnsafePointer[Rule]]:
+    ) -> Tuple[
+        UnsafePointer[Rule, mut=False, origin=StaticConstantOrigin],
+        UnsafePointer[Rule, mut=False, origin=StaticConstantOrigin],
+    ]:
         return (rule.inner[0], rule.inner[1])
 
     fn __getitem__(
         var self: __type_of(Self.Next), rule: Rule
-    ) -> Tuple[UnsafePointer[Rule], UnsafePointer[Rule]]:
+    ) -> Tuple[
+        UnsafePointer[Rule, mut=False, origin=StaticConstantOrigin],
+        UnsafePointer[Rule, mut=False, origin=StaticConstantOrigin],
+    ]:
         return (rule.inner[0], rule.inner[1])
 
     fn __getitem__(
@@ -128,7 +137,11 @@ struct RuleVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]]:
 @fieldwise_init
 struct Rule(Copyable, Movable, Writable):
     var variant: Int
-    var inner: (UnsafePointer[Rule], UnsafePointer[Rule], StaticString)
+    var inner: (
+        UnsafePointer[Rule, mut=False, origin=StaticConstantOrigin],
+        UnsafePointer[Rule, mut=False, origin=StaticConstantOrigin],
+        StaticString,
+    )
 
     fn write_to(self, mut w: Some[Writer]):
         w.write("Rule(categ:", self.variant, ")")

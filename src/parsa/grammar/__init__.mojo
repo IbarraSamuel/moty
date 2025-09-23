@@ -9,6 +9,7 @@ from parsa.automaton import (
     Keywords,
     Plan,
     PlanMode,
+    PlanModeVariant,
     RuleMap,
     SoftKeywords,
     Squashable,
@@ -132,46 +133,49 @@ struct Grammar[T: AnyType]:
                     transition = token.type_().to_squashed()
 
                 self.apply_transition(
-                    stack, backtracking_tokenizer, transtition, token
+                    stack, backtracking_tokenizer, transition, token
                 )
 
-            var tos = stack.tos()
-            var mode = tos.mode
-            if tos.dfa_state.is_final:
-                self.end_of_node(stack, backtracking_tokenizer, mode)
+            ref tos = stack.tos()
+            var mode = tos.mode.copy()
+            if tos.dfa_state[].is_final:
+                self.end_of_node(stack, backtracking_tokenizer, mode^)
             else:
                 self.error_recovery(stack, backtracking_tokenizer, None, None)
 
     @always_inline
-    fn apply_transitions[
-        I: Tokenizer
+    fn apply_transition[
+        I: Tokenizer,
+        dfa_origin: ImmutableOrigin,
+        node_origin: ImmutableOrigin,
     ](
         self,
-        mut stack: Stack,
+        mut stack: Stack[dfa_origin, node_origin],
         mut backtracking_tokenizer: BacktrackingTokenizer[I],
         transition: InternalSquashedType,
-        token: T.Element,
+        token: I.Element,
     ):
         while True:
-            var tos = stack.tos()
-            var is_final = tos.dfa_state.is_final
-            ref lkp = tos.dfa_state.transition_to_plan.lookup(transition)
+            ref tos = stack.tos()
+            var is_final = tos.dfa_state[].is_final
+            ref mode = tos.mode
+            ref lkp = tos.dfa_state[].transition_to_plan.lookup(transition)
             if not lkp:
                 if is_final:
-                    self.end_of_node(stack, backtracking_tokenizer, mode)
+                    self.end_of_node(stack, backtracking_tokenizer, mode.copy())
                 else:
                     self.error_recovery(
                         stack,
                         backtracking_tokenizer,
                         Optional(transition),
-                        Optional(token),
+                        Optional(token.copy()),
                     )
                     return
             else:
                 ref plan = lkp.value()
                 if PlanModeVariant.PositivePeek.matches(plan.mode):
                     ref tos_mut = stack.tos_mut()
-                    tos_mut.dfa_state = plan.next_dfa()
+                    tos_mut.dfa_state = Pointer(to=plan.next_dfa())
                 else:
                     self.apply_plan(stack, plan, token, backtracking_tokenizer)
                     break

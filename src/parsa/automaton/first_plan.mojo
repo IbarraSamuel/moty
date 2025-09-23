@@ -13,29 +13,23 @@ struct FirstPlanVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]]:
     fn matches(self, other: FirstPlan) -> Bool:
         return self.value == other.variant
 
-    fn new[
-        dfa_origin: ImmutableOrigin
-    ](
+    fn new(
         var self: __type_of(Self.Calculated),
-        var plans: Dict[InternalSquashedType, Plan[dfa_origin]],
+        var plans: Dict[InternalSquashedType, Plan],
         is_left_recursive: Bool,
-    ) -> FirstPlan[dfa_origin]:
+    ) -> FirstPlan:
         return {self.value, {plans^, is_left_recursive}}
 
-    fn new[
-        dfa_origin: ImmutableOrigin
-    ](var self: __type_of(Self.Calculating)) -> FirstPlan[dfa_origin]:
+    fn new(var self: __type_of(Self.Calculating)) -> FirstPlan:
         return {self.value, {{}, {}}}
 
     fn __getitem__(
         var self: __type_of(Self.Calculated), first_plan: FirstPlan
-    ) -> ref [first_plan.inner] Tuple[
-        Dict[InternalSquashedType, Plan[first_plan.dfa_origin]], Bool
-    ]:
+    ) -> ref [first_plan.inner] Tuple[Dict[InternalSquashedType, Plan], Bool]:
         return first_plan.inner
 
 
 @fieldwise_init
-struct FirstPlan[dfa_origin: ImmutableOrigin](Copyable, Movable):
+struct FirstPlan(Copyable, Movable):
     var variant: Int
-    var inner: Tuple[Dict[InternalSquashedType, Plan[dfa_origin]], Bool]
+    var inner: Tuple[Dict[InternalSquashedType, Plan], Bool]

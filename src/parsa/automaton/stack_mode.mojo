@@ -13,46 +13,36 @@ struct StackModeVariant[_v: __mlir_type[`!pop.int_literal`] = lit[-1]]:
     fn matches(self, stack_mode: StackMode) -> Bool:
         return self.value == stack_mode.variant
 
-    fn new[
-        dfa_origin: ImmutableOrigin
-    ](
+    fn new(
         var self: __type_of(Self.Alternative),
-        ref [ImmutableAnyOrigin]plan: Plan[dfa_origin],
-    ) -> StackMode[dfa_origin]:
-        return {self.value, Pointer(to=plan)}
+        ref plan: Plan,
+    ) -> StackMode:
+        return {self.value, UnsafePointer(to=plan)}
 
-    fn new[
-        dfa_origin: ImmutableOrigin
-    ](var self: __type_of(Self.LL)) -> StackMode[dfa_origin]:
-        return {self.value, None}
+    fn new(var self: __type_of(Self.LL)) -> StackMode:
+        return {self.value, {}}
 
     fn __getitem__(
         var self: __type_of(Self.Alternative), ref stack_mode: StackMode
-    ) -> ref [stack_mode.inner._value] Pointer[
-        Plan[stack_mode.dfa_origin], ImmutableAnyOrigin
-    ]:
-        return stack_mode.inner.value()
+    ) -> UnsafePointer[Plan, mut=False]:
+        return stack_mode.inner
 
 
 @fieldwise_init
-struct StackMode[dfa_origin: ImmutableOrigin](
-    Copyable, EqualityComparable, Movable, Writable
-):
+struct StackMode(Copyable, EqualityComparable, Movable, Writable):
     var variant: Int
-    var inner: Optional[Pointer[Plan[dfa_origin], ImmutableAnyOrigin]]
+    var inner: UnsafePointer[Plan, mut=False]
 
     fn __eq__(self, other: Self) -> Bool:
         var inner_is_eq = (
-            self.inner
-            and other.inner
-            and self.inner.value() == other.inner.value()
+            self.inner and other.inner and self.inner == other.inner
         ) or not (self.inner or other.inner)
 
         return self.variant == other.variant and inner_is_eq
 
     fn write_to(self, mut w: Some[Writer]):
         if StackModeVariant.Alternative.matches(self):
-            ref dfa = self.inner.value()[].next_dfa()
+            ref dfa = self.inner[].next_dfa()
             w.write(
                 "Alternative(",
                 dfa.from_rule,
