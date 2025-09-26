@@ -1,21 +1,32 @@
 from pathlib import Path
 
+
+fn comptime_split_string[
+    str: String, split_at: String
+]() -> Tuple[String, String]:
+    alias idx = str.find(split_at)
+    return (str[:idx], str[idx + 1 :])
+
+
 alias struct_Grammar = """
+{__create_node}
+
+
 struct {Grammar}:
     var internal_grammar: Grammar[{Token}]
 
     fn __init__(out self):
-        var rules = Dict[...]
+        var rules = Dict[]
         {__parse_rules}
         {__parse_soft_keywords}
         self.internal_grammar = Grammar(rules, {NonterminalType}.map(), {TerminalType}.map(), soft_keywords)
-    
+
     fn keywords[I: Iterator](self) -> __type_of(self.internal_grammar.keywords.keywords.keys()):
         return self.internal_grammar.keywords.keywords.keys()
-    
+
     fn keywords_contain(self, keyword: StringSlice) -> Bool:
         return keyword in self.internal_grammar.keywords.keywords
-    
+
     fn parse(self, code: String) -> {Tree}:
         var start = {NonterminalType}.map()["$first_node"]
         var nodes = self.internal_grammar.parse(code, {Tokenizer}(code), start)
@@ -30,26 +41,26 @@ struct {Tree}(Copyable, Writable):
 
     fn as_code(self) -> StringSlice:
         self.internal_tree.code
-    
+
     fn root_node[o: ImmutableOrigin](self) -> {Node}[o]:
         return self.node(0, self.internal_tree.nodes[0])
 
     @always_inline
     fn node[o: ImmutableOrigin](ref[o] self, index: NodeIndex, ref[o] internal_node: InternalNode) -> {Node}[o]:
         return {Node}(internal_tree=self.internal_tree, internal_node=internal_node, index=index)
-    
+
     fn length(self) -> Int:
         len(self.internal_tree.nodes)
-    
+
     fn nodes(self) -> Iterator:
         fn map_nodes(var arg: Tuple[Int, InternalNode]) -> {Node}:
             return self.node(NodeIndex(arg[0]), arg[1])
-    
+
         return map[map_nodes](enumerate(self.internal_tree.nodes))
-    
+
     fn node_by_index(self, index: NodeIndex) -> {Node}:
         return self.node(index, self.internal_tree.nodes[Int(index)])
-    
+
     fn leaf_by_position(self, position: CodeIndex) -> {Node}:
         var nodes = self.internal_tree.nodes
 
@@ -65,12 +76,12 @@ struct {Tree}(Copyable, Writable):
                     if nl:
                         return nl.value()
                 return node
-        
+
         var node = self.node(NodeIndex(len(nodes) - 1), nodes[-1])
 
         debug_assert(node.is_leaf())
         return node
-    
+
 
     fn write_to(self, mut w: Some[Writer]):
         self.write("Tree(nodes:", self.nodes.__str__(), ")")
@@ -78,53 +89,6 @@ struct {Tree}(Copyable, Writable):
 alias {grammar}: {Grammar} = {Grammar}()
 
 """
-
-
-fn create_grammar[
-    grammar: StringLiteral,
-    Grammar: StringLiteral,
-    Tree: StringLiteral,
-    Node: StringLiteral,
-    NodeType: StringLiteral,
-    NonterminalType: StringLiteral,
-    Tokenizer: StringLiteral,
-    Token: StringLiteral,
-    TerminalType: StringLiteral,
-    soft_keywords: List[StaticString],
-    first_node: StringLiteral,
-    rules: List[StaticString],
-]() -> String:
-    alias _node = __create_node[
-        Tree=Tree,
-        Node=Node,
-        NodeType=NodeType,
-        NonterminalType=NonterminalType,
-        TerminalType=TerminalType,
-        first_node=first_node,
-        rules_to_nodes=rules,
-    ]()
-
-    alias _parse_rules = __parse_rules[NonterminalType, first_node, rules]()
-    alias _parse_soft_keywords = __parse_soft_keywords[
-        TerminalType, soft_keywords
-    ]()
-
-    alias str_grammar = (
-        struct_Grammar.as_string_slice()
-        .replace("{grammar}", grammar)
-        .replace("{Grammar}", Grammar)
-        .replace("{Tree}", Tree)
-        .replace("{Node}", Node)
-        .replace("{NodeType}", NodeType)
-        .replace("{NonterminalType}", NonterminalType)
-        .replace("{Tokenizer}", Tokenizer)
-        .replace("{Token}", Token)
-        .replace("{TerminalType}", TerminalType)
-        .replace("{__parse_rules}", _parse_rules)
-        .replace("{__parse_soft_keywords}", _parse_soft_keywords)
-    )
-
-    return str_grammar
 
 
 # fn __parse_next_identifier[input: StringLiteral, neg: () = (), rule: StringLiteral]() -> String:
@@ -226,42 +190,44 @@ fn __parse_rule[
     rule0: StaticString,
     rule: List[StaticString],
 ]() -> String:
-    r1 = __parse_rule[NonterminalType, rules, saved]()
-    r2 = __parse_rule[NonterminalType, rules, next, rule]
+    r1 = __parse_rule[NonterminalType, rules, saved0, saved]()
+    r2 = __parse_rule[NonterminalType, rules, next, ":", rule0, rule]()
     return String(r1, r2)
 
 
 fn __parse_rule[
     NonterminalType: StringLiteral,
     rules: StringLiteral,
-    saved: LiteralString,
+    saved0: StaticString,
+    saved: List[StaticString],
     next: StringLiteral,
     rule: List[StaticString],
 ]() -> String:
-    return __parse_rule[NonterminalType, rules, saved + next, rule]()
+    alias new_saved = comptime_append[saved, next]()
+    return __parse_rule[NonterminalType, rules, saved0, new_saved, rule]()
 
 
 fn __parse_rule[
     NonterminalType: StringLiteral,
     rules: StringLiteral,
     label: StringLiteral,
-    saved: StringLiteral,
+    saved0: StaticString,
+    saved: List[StaticString],
 ]() -> String:
-    alias _parse_reduce = __parse_reduce[saved]()
     StaticString(
         """
         var key = InternalNonterminalType(Int({NonterminalType}.{label}))
         if key in {rules}:
             os.abort("Key exists twice: `{label}`")
 
-        rules.insert(key, ({label}, {__parse_reduce}))
+        {rules}[key] = ('{label}', {__parse_reduce})
     """
     ).replace("{NonterminalType}", NonterminalType).replace(
         "{rules}", rules
     ).replace(
         "{label}", label
     ).replace(
-        "{__parse_reduce}", _parse_reduce
+        "{__parse_reduce}", __parse_reduce[saved0, saved]()
     )
 
 
@@ -305,19 +271,74 @@ fn __create_node[
     return {}
 
 
+fn create_grammar[
+    grammar: StringLiteral,
+    Grammar: StringLiteral,
+    Tree: StringLiteral,
+    Node: StringLiteral,
+    NodeType: StringLiteral,
+    NonterminalType: StringLiteral,
+    Tokenizer: StringLiteral,
+    Token: StringLiteral,
+    TerminalType: StringLiteral,
+    soft_keywords: List[StaticString],
+    rule: StringLiteral,
+]() -> String:
+    alias rules = rule.split()
+    alias _node = __create_node[
+        Tree=Tree,
+        Node=Node,
+        NodeType=NodeType,
+        NonterminalType=NonterminalType,
+        TerminalType=TerminalType,
+        rules_to_nodes=rules,
+    ]()
+
+    alias str_grammar = (
+        struct_Grammar.as_string_slice()
+        .replace(
+            "{__create_node}",
+            __create_node[
+                Tree, Node, NodeType, NonterminalType, TerminalType, rules
+            ](),
+        )
+        .replace("{grammar}", grammar)
+        .replace("{Grammar}", Grammar)
+        .replace("{Tree}", Tree)
+        .replace("{Node}", Node)
+        .replace("{NodeType}", NodeType)
+        .replace("{NonterminalType}", NonterminalType)
+        .replace("{Tokenizer}", Tokenizer)
+        .replace("{Token}", Token)
+        .replace("{TerminalType}", TerminalType)
+        .replace(
+            "{__parse_rules}",
+            __parse_rules[NonterminalType, "rules", rules](),
+        )
+        .replace(
+            "{__parse_soft_keywords}",
+            __parse_soft_keywords[TerminalType, soft_keywords](),
+        )
+    )
+
+    return str_grammar
+
+
 fn test_empty_rule[write_to: Path = "test_empty_rule.mojo"]() raises:
     var grammar_file = create_grammar[
-        "GRAMMAR",
-        "TestGrammar",
-        "TestTree",
-        "TestNode",
-        "TestNodeType",
-        "TestNonterminalType",
-        "TestTokenizer",
-        "TestTerminal",
-        "TestTerminalType",
+        grammar="GRAMMAR",
+        Grammar="TestGrammar",
+        Tree="TestTree",
+        Node="TestNode",
+        NodeType="TestNodeType",
+        NonterminalType="TestNonterminalType",
+        Tokenizer="TestTokenizer",
+        TerminalType="TestTerminal",
+        soft_keywords="TestTerminalType",
         soft_keywords= [],
-        first_node="rule1: rule2 | Foo",
-        rules= ["rule2: Bar?"],
+        rules="""
+        rule1: Foo
+        rule2: Bar?
+        """,
     ]()
     write_to.write_text(grammar_file)
