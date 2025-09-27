@@ -1,4 +1,4 @@
-from common_utils.enum_utils import lit, ComptimeEnum, RuntimeEnum
+from common_utils.enum_utils import lit
 
 
 @fieldwise_init

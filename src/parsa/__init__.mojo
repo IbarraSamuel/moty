@@ -1,4 +1,5 @@
 from pathlib import Path
+from os import abort
 
 
 fn comptime_split_string[
@@ -6,6 +7,14 @@ fn comptime_split_string[
 ]() -> Tuple[String, String]:
     alias idx = str.find(split_at)
     return (str[:idx], str[idx + 1 :])
+
+
+fn comptime_extend_list[
+    T: Copyable & Movable, //, lst: List[T], item: T
+]() -> List[T]:
+    new_lst = materialize[lst]()
+    new_lst.append(materialize[item]())
+    return new_lst^
 
 
 alias struct_Grammar = """
@@ -127,108 +136,97 @@ alias {grammar}: {Grammar} = {Grammar}()
 #     return __parse_operators["RuleVariant.Maybe.new({_por})".replace("{_por}", __parse_or([], inner)), rule]()
 
 
-# fn __parse_or[saved: StringLiteral, or: () = (), rule: StringLiteral]() -> String:
-#     return StaticString("RuleVariant.Or.new({_pid}, {_por})").replace("{_pid}", __parse_identifier[saved]()).replace("{_por}", __parse_or["", rule]())
-# fn __parse_or[saved: StringLiteral, next: StringLiteral, rule: StringLiteral]() -> String:
-#     alias new_saved = StringSlice(saved).write(" ", next)
-#     return __parse_or[new_saved, rule]()
-# fn __parse_or[saved: StringLiteral]() -> String:
-#     return __parse_identifier(saved)
+fn __parse_or[saved: List[StaticString], rule: List[StaticString]]() -> String:
+    @parameter
+    if len(rule) > 1 and rule[0] == "|":
+        return (
+            StaticString("RuleVariant.Or.new({_pid}, {_por})")
+            .replace("{_pid}", __parse_identifier[saved]())
+            .replace("{_por}", __parse_or["", rule[1:]]())
+        )
+    elif len(rule) > 0:
+        alias new_saved = comptime_extend_list[saved, rule[0]]()
+        return __parse_or[new_saved, rule[1:]]()
 
-# fn __parse_at[*, error_recovery: Bool = False, rule: StringLiteral]() -> String:
-#     @parameter
-#     if error_recovery:
-#         return StaticString("RuleVariant.DoesErrorRecovery.new({__parse_or})").replace(
-#             "{__parse_or}", __parse_or(rule)
-#         )
-#     else:
-#         return __parse_or({}, rule)
+    elif len(rule) == 0:
+        return __parse_identifier[saved]()
+
+    else:
+        abort("Unreachable!")
 
 
-# fn __parse_reduce[
-#     *, may_be_ommited: Bool = False, rule: StringLiteral
-# ]() -> String:
-#     @parameter
-#     if may_be_ommited:
-#         return StaticString("RuleVariant.NodeMayBeOmmited.new({_pr})").replace(
-#             "{_pr}", __parse_at[rule]()
-#         )
+fn __parse_at[rule: List[StaticString]]() -> String:
+    @parameter
+    if rule[0] == "@error_recovery":
+        return StaticString(
+            "RuleVariant.DoesErrorRecovery.new({__parse_or})"
+        ).replace("{__parse_or}", __parse_or[[], rule[1:]]())
+    else:
+        return __parse_or[[], rule]()
 
-#     else:
-#         return __parse_at[rule]()
+
+fn __parse_reduce[rule: List[StaticString]]() -> String:
+    @parameter
+    if rule[0] == "?":
+        return StaticString("RuleVariant.NodeMayBeOmmited.new({_pr})").replace(
+            "{_pr}", __parse_at[rule[1:]]()
+        )
+    else:
+        return __parse_at[rule]()
 
 
 fn __parse_rules[
     NonterminalType: StringLiteral,
     rules: StringLiteral,
-    label: StringLiteral,
-    union: __type_of("|"),
-    rule0: StaticString,
     rule: List[StaticString],
     *,
 ]() -> String:
-    return __parse_rule[NonterminalType, rules, [label], rule0, rule]()
-
-
-fn __parse_rules[
-    NonterminalType: StringLiteral,
-    rules: StringLiteral,
-    label: StringLiteral,
-    colons: __type_of(":"),
-    rule0: StaticString,
-    rule: List[StaticString],
-]() -> String:
-    return __parse_rule[NonterminalType, rules, [label], rule0, rule]()
-
-
-fn __parse_rule[
-    NonterminalType: StringLiteral,
-    rules: StringLiteral,
-    saved0: StaticString,
-    saved: List[StaticString],
-    next: StringLiteral,
-    rule0: StaticString,
-    rule: List[StaticString],
-]() -> String:
-    r1 = __parse_rule[NonterminalType, rules, saved0, saved]()
-    r2 = __parse_rule[NonterminalType, rules, next, ":", rule0, rule]()
-    return String(r1, r2)
+    @parameter
+    if len(rule) > 0 and rule[0].endswith(":") and rule[1] == "|":
+        return __parse_rule[
+            NonterminalType, rules, [rule[0].removesuffix(":")], rule[2:]
+        ]()
+    elif len(rule) > 0 and rule[0].endswith(":"):
+        return __parse_rule[
+            NonterminalType, rules, [rule[0].removesuffix(":")], rule[1:]
+        ]()
+    else:
+        abort("This should not happen!")
 
 
 fn __parse_rule[
     NonterminalType: StringLiteral,
     rules: StringLiteral,
-    saved0: StaticString,
     saved: List[StaticString],
-    next: StringLiteral,
     rule: List[StaticString],
 ]() -> String:
-    alias new_saved = comptime_append[saved, next]()
-    return __parse_rule[NonterminalType, rules, saved0, new_saved, rule]()
+    @parameter
+    if len(rule) > 1 and rule[0].endswith(":"):
+        alias r1 = __parse_rule[NonterminalType, rules, saved, []]()
+        alias r2 = __parse_rules[NonterminalType, rules, rule]()
+        return String(r1, r2)
+    elif len(rule) > 0:
+        alias new_saved = comptime_extend_list[saved, rule[0]]()
+        return __parse_rule[NonterminalType, rules, new_saved, rule[1:]]()
+    elif len(rule) == 0:
+        var label = materialize[saved[0]]()
+        return (
+            StaticString(
+                """
+            var key = InternalNonterminalType(Int({NonterminalType}.{label}))
+            if key in {rules}:
+                os.abort("Key exists twice: `{label}`")
 
-
-fn __parse_rule[
-    NonterminalType: StringLiteral,
-    rules: StringLiteral,
-    label: StringLiteral,
-    saved0: StaticString,
-    saved: List[StaticString],
-]() -> String:
-    StaticString(
+            {rules}[key] = ('{label}', {__parse_reduce})
         """
-        var key = InternalNonterminalType(Int({NonterminalType}.{label}))
-        if key in {rules}:
-            os.abort("Key exists twice: `{label}`")
-
-        {rules}[key] = ('{label}', {__parse_reduce})
-    """
-    ).replace("{NonterminalType}", NonterminalType).replace(
-        "{rules}", rules
-    ).replace(
-        "{label}", label
-    ).replace(
-        "{__parse_reduce}", __parse_reduce[saved0, saved]()
-    )
+            )
+            .replace("{NonterminalType}", NonterminalType)
+            .replace("{rules}", rules)
+            .replace("{label}", label)
+            .replace("{__parse_reduce}", __parse_reduce[saved[1:]]())
+        )
+    else:
+        abort("Unreachable!")
 
 
 fn __parse_soft_keywords[
@@ -265,7 +263,7 @@ fn __create_node[
     NodeType: StringLiteral,
     NonterminalType: StringLiteral,
     TerminalType: StringLiteral,
-    first_node: StringLiteral,
+    first_node: StaticString,
     rules_to_nodes: List[StaticString],
 ]() -> String:
     return {}
@@ -285,21 +283,19 @@ fn create_grammar[
     rule: StringLiteral,
 ]() -> String:
     alias rules = rule.split()
-    alias _node = __create_node[
-        Tree=Tree,
-        Node=Node,
-        NodeType=NodeType,
-        NonterminalType=NonterminalType,
-        TerminalType=TerminalType,
-        rules_to_nodes=rules,
-    ]()
 
     alias str_grammar = (
         struct_Grammar.as_string_slice()
         .replace(
             "{__create_node}",
             __create_node[
-                Tree, Node, NodeType, NonterminalType, TerminalType, rules
+                Tree,
+                Node,
+                NodeType,
+                NonterminalType,
+                TerminalType,
+                rules[0],
+                rules[1:],
             ](),
         )
         .replace("{grammar}", grammar)
@@ -333,10 +329,10 @@ fn test_empty_rule[write_to: Path = "test_empty_rule.mojo"]() raises:
         NodeType="TestNodeType",
         NonterminalType="TestNonterminalType",
         Tokenizer="TestTokenizer",
-        TerminalType="TestTerminal",
-        soft_keywords="TestTerminalType",
+        Token="TestTerminal",
+        TerminalType="TestTerminalType",
         soft_keywords= [],
-        rules="""
+        rule="""
         rule1: Foo
         rule2: Bar?
         """,
