@@ -131,6 +131,30 @@ alias {grammar}: {Grammar} = {Grammar}()
 """
 
 
+fn __parse_next_identifier[
+    input: StaticString, rule: List[StaticString]
+]() -> String:
+    @parameter
+    if len(rule) > 0 and rule[0].startswith("~"):
+        alias new_inp = rule[0].removeprefix("~")
+        alias new_rules = comptime_list_replace[rule, 0, new_inp]()
+        return (
+            "RuleVariant.Cut.new({input}, {_pid})".as_string_slice()
+            .replace("{input}", input)
+            .replace("{_pid}", __parse_identifier[new_rules]())
+        )
+
+    elif len(rule) > 0:
+        return (
+            "RuleVariant.Next.new({input}, {_pid})".as_string_slice()
+            .replace("{input}", input)
+            .replace("{_pid}", __parse_identifier[rule]())
+        )
+
+    else:
+        return input
+
+
 # fn __parse_next_identifier[input: StringLiteral, neg: () = (), rule: StringLiteral]() -> String:
 #     return "RuleVariant.Cut.new({input}, {_pid})".replace("{input}", input).replace("{_pid}", __parse_identifier[rule])
 # fn __parse_next_identifier[input: StringLiteral, rule: StringLiteral]() -> String:
@@ -139,14 +163,55 @@ alias {grammar}: {Grammar} = {Grammar}()
 #     return String(input)
 
 
-# fn __parse_operators[*, input: StringLiteral, plus: () = (), rule: List[StaticString]]() -> String:
-#     return __parse_next_identifier["RuleVariant.Multiple.new({input})".replace("{input}", input), rule]()
-# fn __parse_operators[*, input: StringLiteral, asterisc: () = (), rule: List[StaticString]]() -> String:
-#     return __parse_next_identifier["RuleVariant.Maybe.new(RuleVariant.Multiple.new({input}))".replace("{input}", input), rule]()
-# fn __parse_operators[*, input: StringLiteral, maybe: () = (), rule: List[StaticString]]() -> String:
-#     return __parse_next_identifier["RuleVariant.Maybe.new({input})".replace("{input}", input), rule]()
-# fn __parse_operators[*, separator: StringLiteral, label: StringLiteral, rule: List[StaticString]]() -> String:
-#     return __parse_next_identifier["RuleVariant.Next.new({_pid1},RuleVariant.Maybe.new(RuleVariant.Multiple.new(RuleVariant.Next.new({separator}, {_pid2}))))".replace("{separator}", separator).replace("{_pid1}", __parse_identifier[label]()).replace("{_pid2}", __parse_identifier[label]()), rule]()
+fn __parse_operators[input: StaticString, rule: List[StaticString]]() -> String:
+    @parameter
+    if len(rule) > 0 and rule[0].startswith("+"):
+        alias new_rule = rule[1:] if rule[0] == "+" else comptime_list_replace[
+            rule, 0, rule[0].removeprefix("+")
+        ]()
+        return __parse_next_identifier[
+            "RuleVariant.Multiple.new({input})".as_string_slice().replace(
+                "{input}", input
+            ),
+            new_rule,
+        ]()
+    elif len(rule) > 0 and rule[0].startswith("*"):
+        alias new_rule = rule[1:] if rule[0] == "*" else comptime_list_replace[
+            rule, 0, rule[0].removeprefix("*")
+        ]()
+        return __parse_next_identifier[
+            "RuleVariant.Maybe.new(RuleVariant.Multiple.new({input}))".as_string_slice().replace(
+                "{input}", input
+            ),
+            new_rule,
+        ]()
+    elif len(rule) > 0 and rule[0].startswith("?"):
+        alias new_rule = rule[1:] if rule[0] == "?" else comptime_list_replace[
+            rule, 0, rule[0].removeprefix("?")
+        ]()
+        return __parse_next_identifier[
+            "RuleVariant.Maybe.new({input})".as_string_slice().replace(
+                "{input}", input
+            ),
+            new_rule,
+        ]()
+    elif len(rule) > 0 and rule[0].startswith(".") and "+" in rule[0]:
+        alias separator = input
+        alias w_end = rule[0].find(".")
+        alias label = rule[0][1:w_end]
+        alias to_replace = rule[0][w_end:]
+        alias new_rule = comptime_list_replace[rule, 0, to_replace]()
+        alias pid = __parse_identifier[[label]]()
+        return __parse_next_identifier[
+            "RuleVariant.Next.new({_pid1},RuleVariant.Maybe.new(RuleVariant.Multiple.new(RuleVariant.Next.new({separator},"
+            " {_pid2}))))".as_string_slice()
+            .replace("{separator}", separator)
+            .replace("{_pid1}", pid)
+            .replace("{_pid2}", pid),
+            new_rule,
+        ]()
+    else:
+        return __parse_next_identifier[input, rule]()
 
 
 fn __parse_identifier[rule: List[StaticString]]() -> String:
@@ -154,16 +219,16 @@ fn __parse_identifier[rule: List[StaticString]]() -> String:
     if rule[0].startswith("!"):
         alias lookahead = rule[0].removeprefix("!")
         return __parse_next_identifier[
-            "RuleVariant.NegativeLookahead.new({_pid})".replace(
-                "{_pid}", __parse_identifier[lookahead]()
+            "RuleVariant.NegativeLookahead.new({_pid})".as_string_slice().replace(
+                "{_pid}", __parse_identifier[[lookahead]]()
             ),
             rule[1:],
         ]()
     elif rule[0].startswith("&"):
         alias lookahead = rule[0].removeprefix("&")
         return __parse_next_identifier[
-            "RuleVariant.PositiveLookahead.new({_pid})".replace(
-                "{_pid}", __parse_identifier[lookahead]()
+            "RuleVariant.PositiveLookahead.new({_pid})".as_string_slice().replace(
+                "{_pid}", __parse_identifier[[lookahead]]()
             ),
             rule[1:],
         ]()
@@ -171,7 +236,9 @@ fn __parse_identifier[rule: List[StaticString]]() -> String:
     elif len(rule) > 0 and rule[0].startswith('"') and rule[0].endswith('"'):
         alias string = rule[0]
         return __parse_operators[
-            "RuleVariant.Keyword.new({string})".replace("{string}", string),
+            "RuleVariant.Keyword.new({string})".as_string_slice().replace(
+                "{string}", string
+            ),
             rule[1:],
         ]()
 
@@ -182,7 +249,9 @@ fn __parse_identifier[rule: List[StaticString]]() -> String:
     ):
         alias name = rule[0]
         return __parse_operators[
-            "RuleVariant.Identifier.new({name})".replace("{name}", name),
+            "RuleVariant.Identifier.new({name})".as_string_slice().replace(
+                "{name}", name
+            ),
             rule[1:],
         ]()
 
@@ -211,13 +280,14 @@ fn __parse_identifier[rule: List[StaticString]]() -> String:
         alias other_rules = rule2[i + 1 :]
 
         return __parse_operators[
-            "RuleVariant.Maybe.new({_por})".replace(
+            "RuleVariant.Maybe.new({_por})".as_string_slice().replace(
                 "{_por}", __parse_or[[], inner]()
             ),
             other_rules,
         ]()
 
     abort("Unreachable!")
+    return ""
 
 
 fn __parse_or[saved: List[StaticString], rule: List[StaticString]]() -> String:
@@ -232,11 +302,7 @@ fn __parse_or[saved: List[StaticString], rule: List[StaticString]]() -> String:
         alias new_saved = comptime_extend_list[saved, rule[0]]()
         return __parse_or[new_saved, rule[1:]]()
 
-    elif len(rule) == 0:
-        return __parse_identifier[saved]()
-
-    else:
-        abort("Unreachable!")
+    return __parse_identifier[saved]()
 
 
 fn __parse_at[rule: List[StaticString]]() -> String:
@@ -274,8 +340,9 @@ fn __parse_rules[
         return __parse_rule[
             NonterminalType, rules, [rule[0].removesuffix(":")], rule[1:]
         ]()
-    else:
-        abort("This should not happen!")
+
+    abort("This should not happen!")
+    return ""
 
 
 fn __parse_rule[
@@ -309,8 +376,8 @@ fn __parse_rule[
             .replace("{label}", label)
             .replace("{__parse_reduce}", __parse_reduce[saved[1:]]())
         )
-    else:
-        abort("Unreachable!")
+    abort("Unreachable!")
+    return ""
 
 
 fn __parse_soft_keywords[
